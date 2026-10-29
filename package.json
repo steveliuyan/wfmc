@@ -1,7 +1,7 @@
 {
   "name": "wfmc",
   "productName": "WFMC",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "description": "WFMC - WanFan Minecraft Launcher · 游戏 / 整合包 / 模组 / 光影 下载与启动",
   "main": "dist/main/index.js",
   "author": "WanFan Technology",

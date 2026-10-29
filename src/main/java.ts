@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { resolveJava } from '@xmcl/installer'
@@ -65,6 +66,19 @@ export async function scanJava(): Promise<JavaInfo[]> {
   }
 
   for (const info of await scanLocalJava(homes)) add(info)
+
+  // 2b. 我们自己的运行时目录：直接跑 java -version 实测。
+  // scanLocalJava 认不出时会把装好的运行时漏掉（列表为空），坏文件也可能被当成好的。
+  try {
+    for (const name of fs.readdirSync(store.javaDir)) {
+      const exe = normalizeJavaPath(path.join(store.javaDir, name))
+      if (!exe || found.has(exe.toLowerCase())) continue
+      const probe = await probeJava(exe)
+      if (probe.ok && probe.major) add({ path: exe, version: String(probe.major), majorVersion: probe.major })
+    }
+  } catch {
+    /* 还没装过 */
+  }
 
   // 3. PATH 里的 java
   for (const exe of await getPotentialJavaLocations().catch(() => [] as string[])) {
@@ -155,22 +169,91 @@ async function fetchJsonRetry<T>(url: string, tries = 4, timeoutMs = 30_000): Pr
   throw new Error(`拉取失败：${(lastErr as Error)?.message ?? '网络错误'}（${url}）`)
 }
 
-/** 单文件下载（带重试） */
-async function fetchToFile(url: string, dest: string, tries = 4): Promise<number> {
+/** 流式算 sha1，避免大文件一次读进内存 */
+function sha1Of(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha1')
+    const s = fs.createReadStream(file)
+    s.on('data', (c) => h.update(c as Buffer))
+    s.on('error', reject)
+    s.on('end', () => resolve(h.digest('hex')))
+  })
+}
+
+/**
+ * 单文件下载 + 断点续传 + 完整性校验。
+ *
+ * 本机到 piston-data 的链路经常在中途被重置：流"正常"结束但只下到一半，
+ * 以前直接 rename 当成功 —— 结果就是「提示装好了，java 却起不来（Failed to load jvm.dll）」。
+ * 所以这里必须比 size 和 sha1（Mojang 清单里两者都有），不符就丢掉重下。
+ */
+export async function fetchToFile(
+  url: string,
+  dest: string,
+  expect: { size?: number; sha1?: string } = {},
+  maxAttempts = 20,
+  onRetry?: (msg: string) => void
+): Promise<number> {
+  const part = `${dest}.part`
   let lastErr: unknown
-  for (let i = 1; i <= tries; i++) {
+  let prevSize = -1
+  let stalls = 0
+  for (let i = 1; i <= maxAttempts; i++) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(120_000) })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const buf = Buffer.from(await res.arrayBuffer())
       await fs.promises.mkdir(path.dirname(dest), { recursive: true })
-      const tmp = `${dest}.part`
-      await fs.promises.writeFile(tmp, buf)
-      await fs.promises.rename(tmp, dest)
-      return buf.byteLength
+      let start = 0
+      const st = await fs.promises.stat(part).catch(() => undefined)
+      if (st && st.size > 0) start = st.size
+      const res = await fetch(url, {
+        headers: start ? { Range: `bytes=${start}-` } : undefined,
+        signal: AbortSignal.timeout(180_000)
+      })
+      if (res.status === 416 && start > 0) start = 0
+      if (res.status !== 200 && res.status !== 206) throw new Error(`HTTP ${res.status}`)
+      const append = res.status === 206 && start > 0
+      const out = fs.createWriteStream(part, { flags: append ? 'a' : 'w' })
+      if (res.body) {
+        const reader = res.body.getReader()
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (!out.write(Buffer.from(value))) {
+            await new Promise<void>((r) => out.once('drain', () => r()))
+          }
+        }
+      }
+      await new Promise<void>((resolve, reject) =>
+        out.end((err?: Error | null) => (err ? reject(err) : resolve()))
+      )
+      const got = (await fs.promises.stat(part)).size
+      if (expect.size && got !== expect.size) throw new Error(`断流（${got} / ${expect.size} 字节）`)
+      if (expect.sha1) {
+        const h = await sha1Of(part)
+        if (h.toLowerCase() !== expect.sha1.toLowerCase()) throw new Error('校验不过（文件不完整）')
+      }
+      await fs.promises.rename(part, dest)
+      return got
     } catch (e) {
       lastErr = e
-      if (i < tries) await new Promise((r) => setTimeout(r, 500 * i))
+      const msg = (e as Error).message
+      const broken = /校验不过/.test(msg)
+      // 校验不过 / 大小已超：整份丢掉从头来；只是断流则留着 .part 下一轮续传
+      const cur = await fs.promises.stat(part).then((s) => s.size).catch(() => 0)
+      if (broken || (expect.size && cur >= expect.size)) await fs.promises.rm(part, { force: true }).catch(() => undefined)
+      // 无线续传靠"这轮有没有比上一轮更长"判断：连续两轮没进度就放弃，别死循环
+      if (cur > prevSize) {
+        prevSize = cur
+        stalls = 0
+      } else {
+        stalls++
+      }
+      if (stalls >= 3) break
+      onRetry?.(
+        `${path.basename(dest)} 第 ${i} 次没下完（${msg}），${
+          cur > 0 && !broken ? '从 ' + (cur / 1048576).toFixed(1) + ' MB 续传' : '重试'
+        }`
+      )
+      await new Promise((r) => setTimeout(r, 600 + 400 * Math.min(i, 5)))
     }
   }
   throw lastErr ?? new Error('下载失败')
@@ -188,12 +271,16 @@ function platformKey(): string {
 
 export async function installJavaRuntime(component: string, log?: (line: string) => void): Promise<string> {
   const dest = path.join(store.javaDir, component)
-  // 只下到一半的运行时（缺 jvm 库）会让游戏报 Failed to load ...bin server jvm.dll，
-  // 这种目录直接删掉重来，别在它上面续。
   const jvmLib = path.join(dest, 'bin', 'server', process.platform === 'win32' ? 'jvm.dll' : 'libjvm.so')
+  // 上次下到一半被打断（有 .wfmc-partial 标记）就接着下；没标记又缺 jvm 库的，是老版本留下的坏目录，删掉重来
+  const marker = path.join(dest, '.wfmc-partial')
   if (fs.existsSync(dest) && !fs.existsSync(jvmLib)) {
-    log?.(`[WFMC] 发现 ${component} 的旧文件不完整（缺 jvm 库），先清理再重下`)
-    fs.rmSync(dest, { recursive: true, force: true })
+    if (fs.existsSync(marker)) {
+      log?.(`[WFMC] 接着上次没下完的 ${component} 继续（已下好的文件会跳过）`)
+    } else {
+      log?.(`[WFMC] 发现 ${component} 的旧文件不完整（缺 jvm 库），先清理再重下`)
+      fs.rmSync(dest, { recursive: true, force: true })
+    }
   }
   const mb = (n: number) => (n / 1048576).toFixed(1)
 
@@ -215,47 +302,75 @@ export async function installJavaRuntime(component: string, log?: (line: string)
   let done = 0
   let finished = 0
   const started = Date.now()
+  await fs.promises.mkdir(dest, { recursive: true }).catch(() => undefined)
+  await fs.promises.writeFile(marker, String(started)).catch(() => undefined)
 
-  // 进度写进日志（每 1.5 秒一行），避免用户以为卡死
+  // 进度写进日志（有变化才写，最多每 3 秒一行），避免刷屏又不至于让用户以为卡死
+  let lastLog = 0
+  let lastDone = -1
   const timer = log
     ? setInterval(() => {
+        const now = Date.now()
+        if (now - lastLog < 3000 || done === lastDone) return
+        lastLog = now
+        lastDone = done
         const pct = total ? Math.min(99, Math.round((done / total) * 100)) : 0
-        const secs = Math.round((Date.now() - started) / 1000)
+        const secs = Math.round((now - started) / 1000)
         log(`[WFMC] 下载 Java 运行时 ${mb(done)} / ${mb(total)} MB（${pct}%，已等 ${secs}s）`)
-      }, 1500)
+      }, 1000)
     : undefined
 
   try {
-    const queue = [...files]
-    const worker = async () => {
-      for (;;) {
-        const item = queue.shift()
-        if (!item) return
-        const [rel, f] = item
-        const raw = f.downloads?.raw
-        if (!raw) continue
-        const target = path.join(dest, rel.replace(/[\\/]+/g, path.sep))
-        const size = raw.size ?? 0
-        // 已经下好的文件直接跳过（重试时不用从头来）
-        const stat = await fs.promises.stat(target).catch(() => undefined)
-        if (stat && (!size || stat.size === size)) {
-          done += stat.size
-          finished++
-          continue
-        }
-        const got = await fetchToFile(raw.url, target)
-        done += got
-        finished++
-        if (f.executable) {
+    // 分轮下载：一轮里个别文件实在下不动就先记下来，整轮结束后接着补，
+    // 断网/抖动时不会因为一两个小文件把整份 94MB 判死（已下好的文件下一轮直接跳过）
+    let pending = [...files]
+    for (let round = 1; round <= 4 && pending.length; round++) {
+      const queue = pending.splice(0)
+      const failed: typeof files = []
+      const worker = async () => {
+        for (;;) {
+          const item = queue.shift()
+          if (!item) return
+          const [rel, f] = item
+          const raw = f.downloads?.raw
+          if (!raw) continue
+          const target = path.join(dest, rel.replace(/[\\/]+/g, path.sep))
+          const size = raw.size ?? 0
+          // 已下好的文件跳过——但要连 sha1 一起验：只比大小会把上次断流的坏文件永久跳过
+          const stat = await fs.promises.stat(target).catch(() => undefined)
+          const sameSize = !!stat && (!size || stat.size === size)
+          const sameHash = !!stat && sameSize && (!raw.sha1 || (await sha1Of(target).catch(() => '')) === raw.sha1.toLowerCase())
+          if (stat && sameSize && sameHash) {
+            done += stat.size
+            finished++
+            continue
+          }
+          if (stat && !sameHash) await fs.promises.rm(target, { force: true }).catch(() => undefined)
           try {
-            fs.chmodSync(target, 0o755)
-          } catch {
-            /* Windows 不需要 */
+            const got = await fetchToFile(raw.url, target, { size, sha1: raw.sha1 }, 20, (m) => log?.(`[WFMC] ${m}`))
+            done += got
+            finished++
+            if (f.executable) {
+              try {
+                fs.chmodSync(target, 0o755)
+              } catch {
+                /* Windows 不需要 */
+              }
+            }
+          } catch (e) {
+            failed.push(item)
+            log?.(`[WFMC] ${path.basename(target)} 这一轮没下来（${(e as Error).message}），下一轮再补`)
           }
         }
       }
+      // 并发别开太大：这台机器到 piston-data 的链路一挤就断流，4 路反而更稳
+      await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker))
+      pending = failed
+      if (pending.length && round < 4) {
+        log?.(`[WFMC] 还有 ${pending.length} 个文件没下完，继续第 ${round + 1} 轮…`)
+        await new Promise((r) => setTimeout(r, 1500))
+      }
     }
-    await Promise.all(Array.from({ length: Math.min(8, files.length) }, worker))
   } finally {
     if (timer) clearInterval(timer)
   }
@@ -272,7 +387,20 @@ export async function installJavaRuntime(component: string, log?: (line: string)
   }
   const entryFile = Object.keys(manifest.files ?? {}).find((p) => /bin[\\/]java(\.exe)?$/i.test(p))
   if (!entryFile) throw new Error('运行时安装完成但没找到 java 可执行文件')
-  return path.join(dest, entryFile.replace(/[\\/]+/g, path.sep))
+  const exe = path.join(dest, entryFile.replace(/[\\/]+/g, path.sep))
+
+  // 光看文件齐了不算数：真跑一次 java -version（断流的文件 sha1 会露馅，但再兜一层）
+  log?.(`[WFMC] 正在自检 java -version…`)
+  const probe = await probeJava(exe)
+  if (!probe.ok) {
+    fs.rmSync(dest, { recursive: true, force: true })
+    throw new Error(
+      `装好的 Java 起不来（${probe.error ?? '未知原因'}），已清空重来。网络不稳时多点两次；一直不行就到「设置 → Java 运行时」手动指定本机的 java.exe。`
+    )
+  }
+  log?.(`[WFMC] Java ${probe.major ?? '?'} 自检通过`)
+  await fs.promises.rm(marker, { force: true }).catch(() => undefined)
+  return exe
 }
 
 /** 根据版本号映射 Java 主版本 */

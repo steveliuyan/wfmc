@@ -173,8 +173,17 @@ export function registerIpc() {
   ipcMain.handle('java:scan', async () => await scanJava())
   ipcMain.handle('java:required-major', (_e, mcVersion: string) => requiredJavaMajor(mcVersion))
   ipcMain.handle('java:install', async (_e, component: string) => {
-    const say = (line: string) =>
-      progress({ key: 'java-install', phase: line.replace(/^\[WFMC\]\s*/, ''), current: 0, total: 0 })
+    // 日志里带「x / y MB」的行顺手解析成进度条的值，设置页就能看到真实进度条
+    const say = (line: string) => {
+      const clean = line.replace(/^\[WFMC\]\s*/, '')
+      const m = /([\d.]+)\s*\/\s*([\d.]+)\s*MB/.exec(clean)
+      progress({
+        key: 'java-install',
+        phase: clean,
+        current: m ? Math.round(Number(m[1]) * 1048576) : 0,
+        total: m ? Math.round(Number(m[2]) * 1048576) : 0
+      })
+    }
     try {
       const exe = await installJavaRuntime(component, say)
       progress({ key: 'java-install', phase: 'Java 运行时装好了', current: 0, total: 0, done: true })
