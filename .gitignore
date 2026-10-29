@@ -1,0 +1,25 @@
+node_modules/
+dist/
+release/
+build/*.blockmap
+
+# 运行期数据（便携版会把数据写在这里）
+WFMC-Data/
+*.tmp
+.tmp-*.js
+.tmp-*.txt
+.tmp-*.log
+.publish*.log
+
+# 日志与本地环境
+*.log
+npm-debug.log*
+.env
+.env.local
+
+# 编辑器 / 系统
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db

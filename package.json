@@ -1,0 +1,99 @@
+{
+  "name": "wfmc",
+  "productName": "WFMC",
+  "version": "1.0.18",
+  "description": "WFMC - WanFan Minecraft Launcher · 游戏 / 整合包 / 模组 / 光影 下载与启动",
+  "main": "dist/main/index.js",
+  "author": "WanFan Technology",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build:main": "node scripts/build-main.mjs",
+    "build:renderer": "vite build",
+    "build": "npm run build:main && npm run build:renderer",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dist": "npm run build && electron-builder --win --x64",
+    "dist:portable": "npm run build && electron-builder --win portable --x64",
+    "dist:setup": "npm run build && electron-builder --win nsis --x64",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0"
+  },
+  "dependencies": {
+    "@xmcl/core": "2.13.0",
+    "@xmcl/curseforge": "^2.2.2",
+    "@xmcl/file-transfer": "1.0.6",
+    "@xmcl/installer": "5.4.0",
+    "@xmcl/modrinth": "^2.5.3",
+    "@xmcl/task": "4.1.0",
+    "@xmcl/unzip": "2.1.2",
+    "@xmcl/user": "^4.4.2",
+    "@xmcl/yauzl": "2.10.0",
+    "lottie-web": "^5.13.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "skinview3d": "^3.4.2"
+  },
+  "build": {
+    "appId": "com.wanfan.wfmc",
+    "productName": "WFMC",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "build/icon.ico",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    },
+    "portable": {
+      "artifactName": "WFMC-Portable-${version}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "WFMC",
+      "uninstallDisplayName": "WFMC · 万凡 Minecraft 启动器",
+      "artifactName": "WFMC-Setup-${version}.exe",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": false,
+      "license": "build/license.txt",
+      "include": "build/installer.nsh",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "installerHeader": "build/installerHeader.bmp",
+      "installerLanguages": [
+        "zh_CN"
+      ],
+      "multiLanguageInstaller": true,
+      "menuCategory": false
+    }
+  },
+  "overrides": {
+    "@xmcl/unzip": "2.1.2",
+    "@xmcl/yauzl": "2.10.0"
+  }
+}
