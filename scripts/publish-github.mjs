@@ -78,10 +78,15 @@ function uploadAsset(uploadUrl, file) {
       // 走系统代理时上传 90MB+ 会被代理掐断（curl: (55) Connection was reset），直连更稳
       '--noproxy',
       '*',
+      // 大文件走 HTTP/2 上传偶尔被 reset，降级 http1.1 + 关掉 Expect 100-continue 更稳
+      '--http1.1',
+      '-H',
+      'Expect:',
       '--retry',
-      '3',
+      '5',
       '--retry-delay',
       '5',
+      '--retry-all-errors',
       '-X',
       'POST',
       '-H',

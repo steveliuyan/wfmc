@@ -2966,3 +2966,20 @@ textarea:focus {
 .btn.seg.on .chev { opacity: .95; transform: rotate(180deg); }
 .loader-panel .loader-now { align-items: center; }
 .loader-panel .form-grid.two { margin-top: 12px; }
+/* ---- Select 弹出层改成 portal + fixed：卡片/折叠面板的 overflow:hidden 裁不到 ---- */
+.sel-pop.portal {
+  position: fixed;
+  z-index: 900;
+  top: auto;
+  left: auto;
+  width: max-content;
+  max-width: min(520px, 92vw);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sel-pop.portal .sel-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
