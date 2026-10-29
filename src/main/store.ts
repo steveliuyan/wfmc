@@ -41,7 +41,7 @@ function defaultSettings(): Settings {
   return {
     dataDir: defaultDataDir(),
     theme: 'light',
-    downloadSource: 'auto',
+    downloadSource: 'mirror',
     downloadThreads: 48,
     downloadLimitKbps: 0,
     downloadDir: '',
@@ -128,6 +128,12 @@ class Store {
     }
     if (!this._settings.dataDir || this._settings.dataDir.includes('zhudong-mc-launcher')) {
       this._settings.dataDir = defaultDataDir()
+      corrected = true
+    }
+    // 老配置里的「自动测速」经常测到官方源，国内下起来又慢又断；统一迁到国内镜像
+    if (!this._settings.mirrorMigrated) {
+      if (this._settings.downloadSource === 'auto') this._settings.downloadSource = 'mirror'
+      this._settings.mirrorMigrated = true
       corrected = true
     }
     // 首次运行也把默认值落盘，方便用户直接看/改文件
@@ -225,9 +231,21 @@ class Store {
     for (const it of out) {
       const vId = it.versionId || it.mcVersion
       const gameDir = this.instanceGameDir(it.id)
-      const jar = path.join(gameDir, 'versions', vId, vId + '.jar')
-      const json = path.join(gameDir, 'versions', vId, vId + '.json')
-      it.installed = fs.existsSync(jar) && fs.existsSync(json)
+      const verDir = path.join(gameDir, 'versions', vId)
+      const jar = path.join(verDir, vId + '.jar')
+      const jsonPath = path.join(verDir, vId + '.json')
+      let ok = fs.existsSync(jsonPath)
+      if (ok && !fs.existsSync(jar)) {
+        // 带加载器的版本没有自己的 jar，靠 inheritsFrom 指向原版；原版 jar 也在才算装好
+        try {
+          const vj = JSON.parse(fs.readFileSync(jsonPath, 'utf-8')) as { inheritsFrom?: string }
+          const base = vj.inheritsFrom
+          ok = !!base && fs.existsSync(path.join(gameDir, 'versions', base, base + '.jar'))
+        } catch {
+          ok = false
+        }
+      }
+      it.installed = ok
     }
     return out.sort((a, b) => (b.lastPlayed ?? b.createdAt) - (a.lastPlayed ?? a.createdAt))
   }

@@ -134,10 +134,11 @@ export function diagnoseMods(instanceId: string): { mods: ModMeta[]; issues: Mod
       (m) => m.loader && m.loader !== 'unknown' && m.loader !== expected && !(expected === 'neoforge' && m.loader === 'forge')
     )
     if (mismatch.length > 0) {
+      const need = [...new Set(mismatch.map((m) => String(m.loader)))]
       issues.push({
         level: 'error',
         title: `加载器不匹配（当前 ${expected}）`,
-        detail: `${mismatch.length} 个 mod 是给其它加载器用的，装在这个实例里会报错或被忽略。`,
+        detail: `${mismatch.length} 个 mod 是给 ${need.join(' / ')} 用的，当前实例是 ${expected}，启动时它们会被直接忽略。要玩它们就点上面「加载器」面板装 ${need.join(' / ')} 并切过去；不玩就把这几个文件删掉。`,
         files: mismatch.map((m) => m.file)
       })
     }
@@ -154,7 +155,18 @@ export function diagnoseMods(instanceId: string): { mods: ModMeta[]; issues: Mod
       missing.set(dep, list)
     }
   }
+  const LOADER_WORDS = new Set(['fabric', 'forge', 'neoforge', 'quilt', 'fabricloader'])
   for (const [dep, files] of missing) {
+    if (LOADER_WORDS.has(dep)) {
+      // 声明依赖 fabric 意思是「这是个 Fabric mod」，不是真缺一个前置模组
+      issues.push({
+        level: 'warn',
+        title: `这些 mod 需要 ${dep} 加载器`,
+        detail: `它们依赖 ${dep}，当前实例是 ${expected ?? '原版（没装加载器）'}，加载器不对装进去也不会被加载。想用就到「加载器」面板装 ${dep} 再启动。`,
+        files: [...new Set(files)]
+      })
+      continue
+    }
     issues.push({
       level: 'warn',
       title: `可能缺前置：${dep}`,

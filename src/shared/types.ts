@@ -57,6 +57,8 @@ export interface Settings {
   autoCheckUpdate?: boolean
   /** 收藏的模组 / 光影 / 资源包（手机上叫收藏夹，这里存最小信息免得每次重查） */
   favResources?: FavResource[]
+  /** 把老的「自动测速」一次性迁到国内镜像，迁过就不再动 */
+  mirrorMigrated?: boolean
 }
 
 /** 收藏的一个资源项目 */

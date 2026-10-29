@@ -232,9 +232,9 @@ export default function SettingsView() {
               value={settings.downloadSource}
               width="100%"
               options={[
-                { value: 'auto', label: '自动测速（推荐）' },
-                { value: 'mirror', label: '国内镜像 BMCLAPI（快）' },
-                { value: 'official', label: 'Mojang 官方' }
+                { value: 'mirror', label: '国内镜像 BMCLAPI（推荐）' },
+                { value: 'official', label: 'Mojang 官方（国内常被墙）' },
+                { value: 'auto', label: '自动测速' }
               ]}
               onChange={(v) => saveSettings({ downloadSource: v as 'official' | 'mirror' | 'auto' })}
             />

@@ -502,7 +502,9 @@ export function friendlyError(e: unknown): string {
   if (/fetch failed|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|ECONNRESET|socket hang up|network/i.test(msg)) {
     return '网络连不上（可能被墙或超时），换个下载源或稍后重试'
   }
-  if (/HTTP 404|HTTP 410/i.test(msg)) return '资源在服务器上找不到了（可能已下架或接口变更）'
+  if (/HTTP 404|HTTP 410/i.test(msg)) {
+    return '这个文件在服务器上取不到（镜像上没有就会退回官方重试）。点重试，或到设置里换个下载源'
+  }
   if (/HTTP 5\d\d/i.test(msg)) return '对方服务器出错了，等会儿再试'
   if (/abort/i.test(msg)) return '操作已取消'
   return msg

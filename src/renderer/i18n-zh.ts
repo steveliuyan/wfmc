@@ -482,7 +482,7 @@ const PAIRS: [string, string][] = [
 
   // ===== 错误 / 状态 =====
   ['网络连不上（可能被墙或超时），换个下载源或稍后重试', 'Network unreachable (blocked or timed out) — switch the source or retry later'],
-  ['资源在服务器上找不到了（可能已下架或接口变更）', 'Resource no longer available (delisted or API changed)'],
+  ['这个文件在服务器上取不到（镜像上没有就会退回官方重试）。点重试，或到设置里换个下载源', 'That file is missing on the server (mirrors fall back to official). Retry, or switch the source in Settings'],
   ['对方服务器出错了，等会儿再试', 'The other server errored — try again shortly'],
   ['没有实例。点右上角新建，或去「下载游戏」装整合包。', 'No instances. Create one in the top right, or install a modpack in Download.'],
   ['先去「下载游戏」装一个原版。', 'Install a vanilla build in Download first.'],

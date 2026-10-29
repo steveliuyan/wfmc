@@ -16,7 +16,7 @@ const LOADER_LABEL: Record<string, string> = {
 
 /** 给已有实例补装 / 换加载器（原版实例塞模组用不了，就是从这里装） */
 function LoaderPanel({ instance, onDone }: { instance: Instance; onDone: () => Promise<void> }) {
-  const { toast } = useLauncher()
+  const { toast, askConfirm } = useLauncher()
   const [loader, setLoader] = useState<'fabric' | 'forge' | 'neoforge' | 'quilt'>('fabric')
   const [versions, setVersions] = useState<{ value: string; label: string }[]>([])
   const [ver, setVer] = useState('')
@@ -129,6 +129,39 @@ function LoaderPanel({ instance, onDone }: { instance: Instance; onDone: () => P
         <button className="btn primary" disabled={busy || loading || !ver} onClick={install}>
           {busy ? '安装中…（看右下角任务）' : `给这个实例装 ${LOADER_LABEL[loader]}`}
         </button>
+        {instance.loader !== 'vanilla' && (
+          <button
+            className="btn sm ghost"
+            disabled={busy}
+            title="切回原版后，mods 里的模组不会被加载（文件不会删）"
+            onClick={async () => {
+              if (
+                !(await askConfirm({
+                  title: '切回原版',
+                  message: `把启动版本切回原版 ${instance.mcVersion}？已装好的 ${LOADER_LABEL[instance.loader]} 版本文件会留着，mods 里的模组不会被加载，想用随时再切回来。`,
+                  okText: '切回原版'
+                }))
+              )
+                return
+              setBusy(true)
+              try {
+                await api.updateInstance(instance.id, {
+                  loader: 'vanilla',
+                  loaderVersion: undefined,
+                  versionId: instance.mcVersion
+                })
+                toast(`已切回原版 ${instance.mcVersion}（存档、mods 都在）`, 'success')
+                await onDone()
+              } catch (e) {
+                toast(`切换失败：${friendlyError(e)}`, 'error')
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            切回原版
+          </button>
+        )}
         <span className="muted small">
           装完会新建 {instance.mcVersion} 的 {LOADER_LABEL[loader]} 版本并自动切过去，原来的存档 / mods 都不动。
         </span>
@@ -526,34 +559,42 @@ export default function Instances() {
                       </button>
                     ))}
                   </div>
-                  <label className="row" style={{ marginTop: 10 }}>
-                    <input
-                      type="checkbox"
-                      style={{ width: 18, height: 18 }}
-                      defaultChecked={!!i.isolate}
-                      onChange={(e) => patch(i.id, { isolate: e.target.checked })}
-                    />
-                    <span className="muted small">
-                      版本数据隔离（每个版本独立的存档 / mods / config，libraries 和 assets 仍共享）
-                    </span>
-                  </label>
-                  <label className="row" style={{ marginTop: 8 }}>
-                    <input
-                      type="checkbox"
-                      style={{ width: 18, height: 18 }}
-                      defaultChecked={!!i.resolution?.fullscreen}
-                      onChange={(e) =>
-                        patch(i.id, {
-                          resolution: {
-                            width: i.resolution?.width ?? 854,
-                            height: i.resolution?.height ?? 480,
-                            fullscreen: e.target.checked
-                          }
-                        })
-                      }
-                    />
-                    <span className="muted small">全屏启动</span>
-                  </label>
+                  <div className="switch-list">
+                    <label className="switch-row">
+                      <span className="switch-text">
+                        <span className="switch-title">版本数据隔离</span>
+                        <span className="switch-desc">
+                          每个版本独立的存档 / mods / config，libraries 和 assets 仍共享
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        className="switch"
+                        checked={!!i.isolate}
+                        onChange={(e) => patch(i.id, { isolate: e.target.checked })}
+                      />
+                    </label>
+                    <label className="switch-row">
+                      <span className="switch-text">
+                        <span className="switch-title">全屏启动</span>
+                        <span className="switch-desc">进游戏直接全屏，不想全屏就关掉</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        className="switch"
+                        checked={!!i.resolution?.fullscreen}
+                        onChange={(e) =>
+                          patch(i.id, {
+                            resolution: {
+                              width: i.resolution?.width ?? 854,
+                              height: i.resolution?.height ?? 480,
+                              fullscreen: e.target.checked
+                            }
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
                     </div>
                   )}
 
