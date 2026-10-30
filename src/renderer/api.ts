@@ -216,6 +216,8 @@ export const api = {
   updateInstance: (id: string, patch: Partial<Instance>) => call<Instance>('instance:update', id, patch),
   installLoader: (id: string, loader: string, loaderVersion: string) =>
     call<Instance>('instance:install-loader', id, loader, loaderVersion),
+  installLangPack: (id: string) =>
+    call<{ file: string; name: string; size: number; exact: boolean; packVersion: string }>('langpack:install', id),
   deleteInstance: (id: string, removeFiles: boolean) => call<void>('instance:delete', id, removeFiles),
   duplicateInstance: (id: string, name?: string) => call<Instance>('instance:duplicate', id, name),
   exportInstance: (id: string) => call<string>('instance:export', id),

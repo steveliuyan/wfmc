@@ -298,6 +298,29 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
             <button className="btn" onClick={refresh}>
               刷新
             </button>
+            {(tab === 'mods' || tab === 'resourcepacks') && (
+              <button
+                className="btn ghost"
+                title="模组的中文是作者写在 jar 里的，没写就是英文。装这个汉化资源包后模组界面会变中文（VM 汉化组维护，覆盖 1.12 ~ 最新版）"
+                onClick={async () => {
+                  try {
+                    toast('正在装汉化包，进度看右下角', 'info')
+                    const res = await api.installLangPack(activeId)
+                    toast(
+                      `汉化包已装好并启用：${res.name}（${Math.round(res.size / 1024)} KB）${
+                        res.exact ? '' : '，这个 MC 版本没有专门的包，用的是通用版'
+                      }`,
+                      'success'
+                    )
+                    await refresh()
+                  } catch (e) {
+                    toast(`装汉化包失败：${friendlyError(e)}`, 'error')
+                  }
+                }}
+              >
+                装中文汉化包
+              </button>
+            )}
             {tab === 'saves' && (
               <button
                 className="btn"
