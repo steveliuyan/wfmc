@@ -2,7 +2,7 @@
 
 > 读者：后续接手这个项目的自己 / 服务器上的 AI 助手。
 > 目标：让接手方在**不改架构**的前提下，能加功能（公告通知、账号备份、云同步等）、能排障、能发版。
-> 版本：WFMC 1.0.0（Electron 便携版 `release\WFMC-1.0.0.exe`）
+> 版本：WFMC 1.0.27（`release\WFMC-Portable-1.0.27.exe` / `release\WFMC-Setup-1.0.27.exe`）
 > 文档更新：随代码一起改，别只改代码不改这里。
 
 ---
@@ -12,10 +12,10 @@
 | 项 | 内容 |
 |---|---|
 | 产品 | WFMC · WanFan Minecraft Launcher（万凡科技） |
-| 形态 | Electron 桌面应用，Windows 便携单文件 exe（92MB，双击即用） |
+| 形态 | Electron 桌面应用；Windows 便携单文件 exe（92.2MB，双击即用）+ NSIS 安装版（92.4MB，可选安装位置） |
 | 技术栈 | Electron 38 · React 19 · TypeScript 5.9 · Vite 7 · esbuild · electron-builder 26 |
 | MC 内核 | `@xmcl/core` `@xmcl/installer` `@xmcl/user` `@xmcl/modrinth` `@xmcl/curseforge`（全 MIT） |
-| 数据目录 | 便携版：`<exe 同级>\WFMC-Data`；安装版：`%APPDATA%\WFMC\data` |
+| 数据目录 | 便携版：`<exe 同级>\WFMC-Data`；安装版：`%APPDATA%\WFMC`（`settings.json` 在同级，实例在 `data\instances`） |
 | 通信 | 全部走 `ipcMain.handle('<域>:<动作>')` ↔ `window.launcher.invoke('<域>:<动作>', ...)` |
 | 入口 | 主进程 `src/main/index.ts` → `src/main/ipc.ts`；渲染 `src/renderer/App.tsx` |
 | 规模 | 主进程 34 个模块、渲染 12 个页面 / 3 个组件、约 11k 行 |
@@ -446,3 +446,53 @@ DELETE /api/v1/backups/b1
 11. **拖拽链接（`text/uri-list`）必须 `preventDefault` 才会触发 drop**（原来只处理 Files，导致 LittleSkin 卡片拖进来没反应）。
 12. **单实例锁会让自动化截图静默失败**（见 §9 注意）。
 13. **给 `capturePage` 传窗口尺寸变化**、或窗口在最小化状态时截图全黑 → 截图前确保窗口已 show。
+14. **本机有个死掉的代理 `127.0.0.1:3067`**：`npm`/`electron-builder`/`publish` 之前必须 `foreach ($n in 'HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy','ALL_PROXY','all_proxy','NODE_USE_ENV_PROXY','NO_PROXY','no_proxy') { Remove-Item "env:$n" -ErrorAction SilentlyContinue }`；大小写两份都要删，否则 `Start-Process -RedirectStandardOutput` 会抛「已添加项。字典中的关键字」。
+15. **`pwsh` 里别写 `node -e "...正则..."`**：引号和括号会被 PowerShell 拆碎（报「表达式或语句中包含意外的标记」）。要跑一次性脚本就写 `.tmp-x.cjs` 再 `node .tmp-x.cjs`。
+16. **`styles.css` 是 LF/CRLF 混排**：用 here-string 做替换经常静默不生效，改它一律用 node `readFileSync` + `includes()` 校验后再 `writeFileSync`。
+17. **自检截图的时机**：`WFMC_SHOT_DELAY` 从进程启动算，页面慢的时候截图会落在你的 JS 跑完之前——所以 JS 里的 `await sleep()` 尽量压到 1.5s 以内，或者用 `setInterval` 反复把状态摆回去。
+
+---
+
+## 14. 版本演进：1.0.20 → 1.0.27（接手时先读这一节）
+
+这一节只写「现在系统里有什么」和「为什么这么写」，细节看对应源码。
+
+### 14.1 下载与 Java
+
+- `src/main/fastdl.ts`：自研多线程下载器 `MultiDownloader`（默认 48 线程、8 分片、`MIN_CHUNK=8MB`、`.part.json` 断点续传、30s 无进度超时）。`Download.tsx` 支持贴链接下载、暂停/继续/取消。
+- `src/main/java.ts`：`installJavaRuntime` 自己按 Mojang runtime index 装 JRE（绕开 `@xmcl` 的 AggregateError），`fetchToFile(url, dest, {size, sha1}, maxAttempts, onRetry)` **必须**带 Range 续传 + sha1/size 双校验——本机断流会把 jvm.dll 下成半截且大小偶合，不校验就会「Java 装好了但启动报 0xc000007b」。装完 `probeJava` 真跑一次 `-version` 才算成功。
+- 下载源默认 `mirror`（BMCLAPI），`settings.mirrorMigrated` 做过一次性迁移。
+
+### 14.2 加载器与模组诊断
+
+- `src/main/moddoctor.ts`：解析 `fabric.mod.json` / `quilt.mod.json` / `META-INF/(neoforge.)mods.toml`，判「加载器不匹配」「缺前置」「前置版本对不上」。
+  - Forge/NeoForge 一定按 `[[dependencies.xxx]]` **段落**解析（同一行匹配会把模组自身也算成依赖）；
+  - 版本范围 `satisfiesRange()` 支持 `>=1.0 <2.0` / `~` / `^` / `1.2.x` / Maven `[1.0,2.0)`；看不懂的写法返回 true（宁可不报，不乱吓人）。
+- `ModIssue.fixLoader`（一键换加载器，`Manage.tsx` 里渲染按钮）与 `fixDep`（一键补前置）。
+- `src/main/moddeps.ts`：`resolveProjectId(modid)` 先按 slug 查 Modrinth，失败再三轮 search；`fixMissingDeps` → `installResource`（自带递归装 required 依赖）。
+- 常量 `NOT_A_MOD` 里的伪依赖（minecraft / java / forge / fabricloader…）一律跳过。
+
+### 14.3 汉化资源包（VM + CFPA 双源）
+
+- `src/main/langpack.ts`：`installLangPacks(instanceId)` 同时装两个源——Modrinth 项目 `vmct`（VM 汉化组，210 个 modid）和 GitHub `CFPAOrg/Minecraft-Mod-Language-Package` 的 release 资产（400 个 modid，`github.com` 本机不通，必须走 `gh-proxy.com` → `ghfast.top` 镜像）。装完调 `options.ts` 的 `enableResourcePack()` 写 `resourcePacks` + `lang:zh_cn`。
+- `inspectLangPack()` 返回两个包的**并集**覆盖数；`readPackContents()` 读单个 zip 里所有 `assets/<modid>/lang/zh_cn.json` 并数 key，给「看看翻了哪些模组」弹层用。
+- `removePack()` / `removeLangPacks()` 删文件前一定先 `disableResourcePack()` 摘掉 `options.txt` 里的 `file/xxx.zip`，否则游戏会报资源包缺失。
+- **已知无解**：作者把语言文件路径写成 `assets/modid/lang/en_us.json`（模板没替换）或界面文字硬编码 `drawString` 的模组，任何资源包都翻译不到（例：Lucky Blocks）。
+
+### 14.4 存档打包 / 恢复（带完整性校验）
+
+- `src/main/worldpack.ts`：`packWorld()` 把存档目录压成 `.wfmcworld.zip`，第一个条目是 `wfmc-worldpack.json` 清单（每个文件的相对路径 / 大小 / SHA-1，外加一个整体 `digest`）。
+- `inspectWorldPack()` 只校验不写盘；`restoreWorldPack()` **先全量校验，任何一个文件对不上就直接抛错、一个字节都不写**；同名存档自动改名 `名字 (恢复 20261030-1742)`；写盘带 zip-slip 防护。没有清单的老 zip 按 `world/` 前缀剥离后整体解出（`signed:false`）。
+- `src/main/zip.ts` 的 `writeZipCompressed()` 逐文件 `deflateRawSync`，压不动自动退回 store，所以从包里再打一次包 digest 完全一致（round-trip 已验证）。
+
+### 14.5 界面这几处被重写过，改之前先看
+
+- `views/Home.tsx`：主页三块（数据面板 / 快捷操作 / 启动日志）支持 App 式拖动——按住 140ms 起拖、浮层跟随、原位留虚线占位、其它卡做 FLIP 让位动画；`settings.homeLayout` 存顺序。
+- `styles.css` 的 `.grid-2` 有 `align-items: start`（否则同排两卡互相拉高）；`.progress-fold` 用 `grid-template-rows: 0fr→1fr` 做折叠动画；`.drag-float` 是 `position: fixed` 的拖拽浮层（`z-index: 900`）。
+- 首页按钮互斥靠 `store.tsx` 暴露的 `runningTask`（`tasks.find(t=>t.status==='running')`），**任何新加的耗时按钮都要判它**。
+- `views/Manage.tsx`：内容工具栏 + 存档工具栏（打包/校验/恢复）+ 汉化包提示条（看看翻了哪些 / 卸载）+ 资源包「内容」弹层。
+- `views/UpdateCenter.tsx`：更新中心（hero 版本对比、历史版本时间线、资产下载、更新源输入）。
+
+### 14.6 任务系统是硬约定
+
+**所有**可能超过 1 秒的操作都必须 `runTask(kind, title, async (ctx) => …)`，并且进度上报要带 `taskId: ctx.id`——不带的话渲染层的「任务结束就清掉这条进度」逻辑匹配不上，那条进度会在首页永远挂着（`mods:updates` 就踩过这个坑，表现为永远「计算文件指纹 0/2」）。
