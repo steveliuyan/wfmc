@@ -39,6 +39,11 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     return () => clearTimeout(timer)
   }, [modIssues])
   const [packOrder, setPackOrder] = useState<string[]>([])
+  const [langCov, setLangCov] = useState<{
+    pack: string | null
+    coveredCount: number
+    mods: { id: string; name: string; covered: boolean; selfChinese: boolean }[]
+  }>()
   const [worlds, setWorlds] = useState<string[]>([])
   const [world, setWorld] = useState('')
   const [packs, setPacks] = useState<ContentItem[]>([])
@@ -77,6 +82,22 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, activeId])
+
+  // 模组页顺便算一下汉化包覆盖情况：装了没生效时能立刻看出来是哪个模组没收录
+  useEffect(() => {
+    if (tab !== 'mods' || !activeId) {
+      setLangCov(undefined)
+      return
+    }
+    let alive = true
+    api
+      .inspectLangPack(activeId)
+      .then((c) => alive && setLangCov(c))
+      .catch(() => alive && setLangCov(undefined))
+    return () => {
+      alive = false
+    }
+  }, [tab, activeId, items.length])
 
   if (!target) {
     return (
@@ -150,6 +171,47 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
       {tab === 'mods' && target.loader !== 'vanilla' && (
         <div className="notice-bar">
           当前实例是 <b>{target.loader}</b>，mods 里的 jar 会在启动时由加载器自动读入（前置模组也是 jar，放一起就行，不需要「从依赖启动」）。
+        </div>
+      )}
+
+      {tab === 'mods' && langCov && (
+        <div className="notice-bar">
+          {langCov.pack ? (
+            <>
+              汉化包「{langCov.pack}」收录了 <b>{langCov.coveredCount}</b> 个模组的中文。这里的 {langCov.mods.length} 个模组里：
+              {langCov.mods.filter((m) => m.covered || m.selfChinese).length > 0 && (
+                <>
+                  {' '}
+                  <b className="ok-text">
+                    {langCov.mods
+                      .filter((m) => m.covered || m.selfChinese)
+                      .map((m) => m.name)
+                      .join('、')}
+                  </b>{' '}
+                  有中文；
+                </>
+              )}
+              {langCov.mods.filter((m) => !m.covered && !m.selfChinese).length > 0 ? (
+                <>
+                  {' '}
+                  <b className="warn-text">
+                    {langCov.mods
+                      .filter((m) => !m.covered && !m.selfChinese)
+                      .map((m) => m.name)
+                      .join('、')}
+                  </b>{' '}
+                  汉化包里没有它们的语言文件，界面还是英文——这类只能等汉化组收录，或者去找作者自己发布的中文语言文件塞进 jar。
+                  <span className="muted small">
+                    （另外：模组里直接写死的文字，比如标题栏那种，资源包也翻不了，那是作者代码里的字符串。）
+                  </span>
+                </>
+              ) : (
+                langCov.mods.length > 0 && <> 全部有中文了。</>
+              )}
+            </>
+          ) : (
+            <>还没装汉化包。装模组后界面是英文的话，点上面的「装中文汉化包」。</>
+          )}
         </div>
       )}
 
@@ -313,6 +375,7 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                       'success'
                     )
                     await refresh()
+                    api.inspectLangPack(activeId).then(setLangCov).catch(() => undefined)
                   } catch (e) {
                     toast(`装汉化包失败：${friendlyError(e)}`, 'error')
                   }

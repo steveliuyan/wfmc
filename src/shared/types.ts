@@ -59,6 +59,8 @@ export interface Settings {
   favResources?: FavResource[]
   /** 把老的「自动测速」一次性迁到国内镜像，迁过就不再动 */
   mirrorMigrated?: boolean
+  /** 首页下面几块卡片的排列顺序（自己拖着改的） */
+  homeLayout?: string[]
 }
 
 /** 收藏的一个资源项目 */

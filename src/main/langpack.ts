@@ -4,6 +4,7 @@ import { downloadFile } from './net'
 import { enableResourcePack } from './options'
 import { gamePathFor } from './paths'
 import { store } from './store'
+import { listZipEntries, readFileInsideZip } from './zip'
 
 /**
  * 模组汉化包。
@@ -79,4 +80,96 @@ export async function installLangPack(
   onProgress?.({ phase: '已装好并启用汉化包', current: 1, total: 1 })
 
   return { file: dest, name: path.basename(dest), size: fs.statSync(dest).size, exact, packVersion: version.version_number }
+}
+
+export interface ModCoverage {
+  id: string
+  name: string
+  /** 汉化包里有它的 zh_cn.json */
+  covered: boolean
+  /** 模组 jar 自己带中文 */
+  selfChinese: boolean
+}
+
+export interface LangCoverage {
+  pack: string | null
+  coveredCount: number
+  mods: ModCoverage[]
+}
+
+/**
+ * 汉化包到底覆盖了哪些模组 —— 用户最常问的就是「我装了，为什么这个模组还是英文」。
+ * 资源包只能替换 jar 里用可翻译键定义的文本，模组硬编码的字符串（直接 drawString 的标题等）谁都翻不了；
+ * 另外 VM 汉化包是按模组收录的，没收录的模组自然一点中文都没有。
+ */
+export function inspectLangPack(instanceId: string): LangCoverage {
+  const instance = store.getInstance(instanceId)
+  if (!instance) throw new Error('实例不存在')
+  const gameDir = gamePathFor(instance)
+
+  // 1) 找覆盖模组最多的那个资源包（一般就是汉化包）
+  const rpDir = path.join(gameDir, 'resourcepacks')
+  let pack: string | null = null
+  const covered = new Set<string>()
+  if (fs.existsSync(rpDir)) {
+    for (const z of fs.readdirSync(rpDir)) {
+      if (!z.toLowerCase().endsWith('.zip')) continue
+      try {
+        const buf = fs.readFileSync(path.join(rpDir, z))
+        const ids = new Set<string>()
+        for (const e of listZipEntries(buf)) {
+          const m = /^assets\/([^/]+)\/lang\/zh_cn\.json$/i.exec(e.name)
+          if (m) ids.add(m[1].toLowerCase())
+        }
+        if (ids.size > covered.size) {
+          pack = z
+          covered.clear()
+          ids.forEach((i) => covered.add(i))
+        }
+      } catch {
+        // 坏包跳过
+      }
+    }
+  }
+
+  // 2) 读 mods 里每个模组的 id
+  const modsDir = path.join(gameDir, 'mods')
+  const mods: ModCoverage[] = []
+  if (fs.existsSync(modsDir)) {
+    for (const f of fs.readdirSync(modsDir)) {
+      if (!/\.jar(\.disabled)?$/i.test(f)) continue
+      const jar = path.join(modsDir, f)
+      let id = ''
+      let name = f.replace(/\.jar(\.disabled)?$/i, '')
+      try {
+        const raw = readFileInsideZip(jar, 'fabric.mod.json')
+        if (raw) {
+          const j = JSON.parse(raw.toString('utf8')) as { id?: string; name?: string }
+          id = String(j.id ?? '').toLowerCase()
+          if (j.name) name = j.name
+        } else {
+          const raw2 = readFileInsideZip(jar, 'META-INF/neoforge.mods.toml') ?? readFileInsideZip(jar, 'META-INF/mods.toml')
+          if (raw2) {
+            const txt = raw2.toString('utf8')
+            const m = /^\s*modId\s*=\s*"([^"]+)"/m.exec(txt)
+            const d = /^\s*displayName\s*=\s*"([^"]+)"/m.exec(txt)
+            if (m) id = m[1].toLowerCase()
+            if (d) name = d[1]
+          }
+        }
+      } catch {
+        // 解析不了就当普通文件
+      }
+      if (!id) continue
+      let selfChinese = false
+      try {
+        selfChinese = !!readFileInsideZip(jar, `assets/${id}/lang/zh_cn.json`)
+      } catch {
+        selfChinese = false
+      }
+      mods.push({ id, name, covered: covered.has(id), selfChinese })
+    }
+  }
+
+  return { pack, coveredCount: covered.size, mods }
 }

@@ -80,7 +80,7 @@ import { applyPerfPreset, deleteScreenshot, listScreenshots, PERF_PRESETS, scree
 import { cancelTask, clearFinishedTasks, listTasks, runTask, setTaskEmitter } from './tasks'
 import { applyUpdate, checkReleases, checkUpdate, pickAsset } from './updater'
 import { diagnoseMods } from './moddoctor'
-import { installLangPack } from './langpack'
+import { installLangPack, inspectLangPack } from './langpack'
 import { cleanTempFiles, speedTest } from './speedtest'
 import { importTracks, listTracks, musicDir, removeTrack } from './music'
 import { installCurseforgeMod, searchCurseforge, testCurseforgeKey } from './curseforge'
@@ -237,6 +237,7 @@ export function registerIpc() {
       })
     )
   })
+  ipcMain.handle('langpack:inspect', (_e, id: string) => inspectLangPack(id))
   ipcMain.handle('instance:open-folder', async (_e, id: string) => {
     await shell.openPath(store.instanceGameDir(id))
   })

@@ -218,6 +218,12 @@ export const api = {
     call<Instance>('instance:install-loader', id, loader, loaderVersion),
   installLangPack: (id: string) =>
     call<{ file: string; name: string; size: number; exact: boolean; packVersion: string }>('langpack:install', id),
+  inspectLangPack: (id: string) =>
+    call<{
+      pack: string | null
+      coveredCount: number
+      mods: { id: string; name: string; covered: boolean; selfChinese: boolean }[]
+    }>('langpack:inspect', id),
   deleteInstance: (id: string, removeFiles: boolean) => call<void>('instance:delete', id, removeFiles),
   duplicateInstance: (id: string, name?: string) => call<Instance>('instance:duplicate', id, name),
   exportInstance: (id: string) => call<string>('instance:export', id),

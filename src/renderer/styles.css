@@ -2999,3 +2999,63 @@ textarea:focus {
 .switch:checked{background:var(--accent)}
 .switch:checked::after{transform:translateX(18px)}
 .switch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* ── 首页布局编辑 ── */
+.layout-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 9px 13px;
+  border-radius: 12px;
+  border: 1px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--text);
+  font-size: 12.5px;
+}
+.layout-hint i {
+  font-style: normal;
+  font-size: 15px;
+  color: var(--accent);
+}
+.grid-2.editing .card {
+  border-style: dashed;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  transition: transform .18s cubic-bezier(.4, 0, .2, 1), box-shadow .18s ease, border-color .18s ease;
+}
+.grid-2.editing .card:hover {
+  border-color: var(--accent);
+}
+.grid-2.editing .card.dragging {
+  cursor: grabbing;
+  transform: scale(1.012);
+  border-color: var(--accent);
+  box-shadow: 0 20px 44px -22px rgba(0, 0, 0, .45);
+}
+.grid-2.editing .card.dragging > * {
+  opacity: .55;
+}
+.drag-grip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--line);
+  font-size: 11.5px;
+  letter-spacing: .3px;
+  color: var(--muted);
+}
+.grid-2.editing .card.dragging .drag-grip {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* ── 通用文字色 ── */
+.ok-text {
+  color: #1a9c62;
+}
+.warn-text {
+  color: #c98110;
+}
