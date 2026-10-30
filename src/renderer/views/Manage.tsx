@@ -385,15 +385,61 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
               </button>
             )}
             {tab === 'saves' && (
-              <button
-                className="btn"
-                onClick={async () => {
-                  const p = await api.backupSaves(activeId)
-                  p ? toast(`已备份到 ${p}`, 'success') : toast('存档目录是空的', 'info')
-                }}
-              >
-                备份所有存档
-              </button>
+              <>
+                <button
+                  className="btn primary"
+                  onClick={async () => {
+                    try {
+                      const r = await api.restoreWorld(activeId)
+                      if (!r) return
+                      const mb = (r.bytes / 1024 / 1024).toFixed(1)
+                      toast(`已恢复「${r.name}」：${r.fileCount} 个文件 / ${mb} MB`, 'success')
+                      if (r.renamed) toast('已存在同名存档，新的这份自动改了名', 'info')
+                      const pk = r.check.info?.mcVersion
+                      if (pk && pk !== target.mcVersion) {
+                        toast(`这个存档是在 ${pk} 里存的，当前实例是 ${target.mcVersion}`, 'info')
+                      }
+                      await refresh()
+                      setWorlds(await api.worlds(activeId))
+                    } catch (e) {
+                      toast(`恢复失败：${friendlyError(e)}`, 'error')
+                    }
+                  }}
+                >
+                  导入存档包
+                </button>
+                <button
+                  className="btn ghost"
+                  onClick={async () => {
+                    try {
+                      const c = await api.inspectWorldPack()
+                      if (!c) return
+                      if (!c.signed) {
+                        toast('这个 zip 里没有 WFMC 校验清单，只能当普通压缩包恢复', 'info')
+                        return
+                      }
+                      if (c.ok) {
+                        toast(`校验通过：${c.checked} 个文件全部对上，可以放心恢复`, 'success')
+                      } else {
+                        toast(`校验没通过：${c.problems.length} 个文件有问题，第一个是 ${c.problems[0].path}（${c.problems[0].kind}）`, 'error')
+                      }
+                    } catch (e) {
+                      toast(`校验失败：${friendlyError(e)}`, 'error')
+                    }
+                  }}
+                >
+                  校验存档包
+                </button>
+                <button
+                  className="btn ghost"
+                  onClick={async () => {
+                    const p = await api.backupSaves(activeId)
+                    p ? toast(`已备份到 ${p}`, 'success') : toast('存档目录是空的', 'info')
+                  }}
+                >
+                  备份所有存档
+                </button>
+              </>
             )}
             <span className="muted small">共 {items.length} 项{loading ? ' · 读取中…' : ''}</span>
           </div>
@@ -427,6 +473,24 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                 </div>
                 <span className="muted small">{item.isDir ? '—' : formatSize(item.size)}</span>
                 <span className="row">
+                  {tab === 'saves' && item.isDir && (
+                    <button
+                      className="btn sm"
+                      onClick={async () => {
+                        try {
+                          const r = await api.packWorld(activeId, item.name)
+                          if (!r) return
+                          const mb = (r.zipBytes / 1024 / 1024).toFixed(1)
+                          toast(`已打包：${r.info.fileCount} 个文件 → ${mb} MB（含 sha1 校验清单）`, 'success')
+                          toast(`存到了 ${r.path}`, 'info')
+                        } catch (e) {
+                          toast(`打包失败：${friendlyError(e)}`, 'error')
+                        }
+                      }}
+                    >
+                      打包
+                    </button>
+                  )}
                   {!item.isDir && (
                     <button
                       className="btn sm"

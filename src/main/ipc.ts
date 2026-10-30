@@ -81,6 +81,7 @@ import { cancelTask, clearFinishedTasks, listTasks, runTask, setTaskEmitter } fr
 import { applyUpdate, checkReleases, checkUpdate, pickAsset } from './updater'
 import { diagnoseMods } from './moddoctor'
 import { installLangPacks, inspectLangPack } from './langpack'
+import { PACK_EXT, inspectWorldPack, packWorld, restoreWorldPack } from './worldpack'
 import { cleanTempFiles, speedTest } from './speedtest'
 import { importTracks, listTracks, musicDir, removeTrack } from './music'
 import { installCurseforgeMod, searchCurseforge, testCurseforgeKey } from './curseforge'
@@ -494,6 +495,64 @@ export function registerIpc() {
   ipcMain.handle('music:remove', (_e, name: string) => removeTrack(name))
   ipcMain.handle('music:open-dir', async () => {
     await shell.openPath(musicDir())
+  })
+
+  // ---------- 存档打包 / 恢复 / 校验 ----------
+  ipcMain.handle('world:pack', async (e, instanceId: string, world: string) => {
+    const instance = store.getInstance(instanceId)
+    if (!instance) throw new Error('实例不存在')
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const opts = {
+      title: `打包存档「${world}」`,
+      defaultPath: path.join(
+        app.getPath('downloads'),
+        `${world}-${instance.mcVersion}-${Date.now() % 100000}${PACK_EXT}`
+      ),
+      filters: [{ name: 'WFMC 存档包', extensions: ['zip'] }]
+    }
+    const res = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
+    if (res.canceled || !res.filePath) return undefined
+    const out = res.filePath.toLowerCase().endsWith('.zip') ? res.filePath : res.filePath + '.zip'
+    return await runTask('misc', `打包存档 ${world}`, async (ctx) =>
+      packWorld(instanceId, world, out, (p) => {
+        progress({ phase: p.phase, current: p.current, total: p.total, key: `world-${instanceId}`, taskId: ctx.id })
+        ctx.report({ phase: p.phase, current: p.current, total: p.total })
+      })
+    )
+  })
+  ipcMain.handle('world:inspect', async (e, zipPath?: string) => {
+    let file = zipPath
+    if (!file) {
+      const win = BrowserWindow.fromWebContents(e.sender)
+      const opts = {
+        title: '校验存档包',
+        properties: ['openFile' as const],
+        filters: [{ name: 'WFMC 存档包', extensions: ['zip'] }]
+      }
+      const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+      if (res.canceled || res.filePaths.length === 0) return undefined
+      file = res.filePaths[0]
+    }
+    return inspectWorldPack(file)
+  })
+  ipcMain.handle('world:restore', async (e, instanceId: string) => {
+    const instance = store.getInstance(instanceId)
+    if (!instance) throw new Error('实例不存在')
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const opts = {
+      title: '恢复存档包',
+      properties: ['openFile' as const],
+      filters: [{ name: 'WFMC 存档包', extensions: ['zip'] }]
+    }
+    const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+    if (res.canceled || res.filePaths.length === 0) return undefined
+    const file = res.filePaths[0]
+    return await runTask('misc', `恢复存档 ${path.basename(file)}`, async (ctx) =>
+      restoreWorldPack(instanceId, file, (p) => {
+        progress({ phase: p.phase, current: p.current, total: p.total, key: `world-${instanceId}`, taskId: ctx.id })
+        ctx.report({ phase: p.phase, current: p.current, total: p.total })
+      })
+    )
   })
 
   // ---------- 数据包 ----------

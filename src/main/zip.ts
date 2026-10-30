@@ -240,3 +240,105 @@ export function zipDirectory(dir: string, outputPath: string): number {
   const files = collectDirFiles(dir)
   return writeZip(outputPath, files)
 }
+
+/**
+ * 写 zip 时对每个文件做 deflate（压不动就退回 store）。
+ * 存档里大量是 region/mca 和 json 文本，压一下能小不少，恢复时再解回来。
+ */
+export function writeZipCompressed(
+  outputPath: string,
+  files: { name: string; full: string }[],
+  onEach?: (name: string, index: number, total: number) => void
+): number {
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+  const fd = fs.openSync(outputPath, 'w')
+
+  const central: Buffer[] = []
+  let offset = 0
+  let count = 0
+  const total = files.length
+
+  for (const file of files) {
+    let raw: Buffer
+    try {
+      raw = fs.readFileSync(file.full)
+    } catch {
+      continue
+    }
+    const crc = crc32(raw)
+    let method = 0
+    let body = raw
+    try {
+      const packed = zlib.deflateRawSync(raw, { level: 6 })
+      if (packed.length < raw.length) {
+        method = 8
+        body = packed
+      }
+    } catch {
+      /* 压缩失败就用原文 */
+    }
+
+    const nameBuf = Buffer.from(file.name.replace(/\\/g, '/'), 'utf8')
+
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(LOC_SIG, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(0x0800, 6)
+    local.writeUInt16LE(method, 8)
+    local.writeUInt16LE(0, 10)
+    local.writeUInt16LE(0, 12)
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(body.length, 18)
+    local.writeUInt32LE(raw.length, 22)
+    local.writeUInt16LE(nameBuf.length, 26)
+    local.writeUInt16LE(0, 28)
+
+    fs.writeSync(fd, local)
+    fs.writeSync(fd, nameBuf)
+    fs.writeSync(fd, body)
+
+    const cen = Buffer.alloc(46)
+    cen.writeUInt32LE(CEN_SIG, 0)
+    cen.writeUInt16LE(20, 4)
+    cen.writeUInt16LE(20, 6)
+    cen.writeUInt16LE(0x0800, 8)
+    cen.writeUInt16LE(method, 10)
+    cen.writeUInt16LE(0, 12)
+    cen.writeUInt16LE(0, 14)
+    cen.writeUInt32LE(crc, 16)
+    cen.writeUInt32LE(body.length, 20)
+    cen.writeUInt32LE(raw.length, 24)
+    cen.writeUInt16LE(nameBuf.length, 28)
+    cen.writeUInt16LE(0, 30)
+    cen.writeUInt16LE(0, 32)
+    cen.writeUInt16LE(0, 34)
+    cen.writeUInt16LE(0, 36)
+    cen.writeUInt32LE(0, 38)
+    cen.writeUInt32LE(offset, 42)
+    central.push(cen, nameBuf)
+
+    offset += local.length + nameBuf.length + body.length
+    count++
+    if (onEach) onEach(file.name, count, total)
+  }
+
+  const cenStart = offset
+  let cenSize = 0
+  for (const buf of central) {
+    fs.writeSync(fd, buf)
+    cenSize += buf.length
+  }
+
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(EOCD_SIG, 0)
+  eocd.writeUInt16LE(0, 4)
+  eocd.writeUInt16LE(0, 6)
+  eocd.writeUInt16LE(count, 8)
+  eocd.writeUInt16LE(count, 10)
+  eocd.writeUInt32LE(cenSize, 12)
+  eocd.writeUInt32LE(cenStart, 16)
+  eocd.writeUInt16LE(0, 20)
+  fs.writeSync(fd, eocd)
+  fs.closeSync(fd)
+  return count
+}

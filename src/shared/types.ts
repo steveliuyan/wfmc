@@ -324,3 +324,61 @@ export interface LaunchStatePayload {
   message?: string
   code?: number
 }
+
+/** 存档包里的单个文件指纹 */
+export interface PackEntry {
+  /** 相对存档目录的路径，统一用 / */
+  path: string
+  size: number
+  sha1: string
+}
+
+/** 存档包清单（打包时写进 zip 根的 wfmc-worldpack.json） */
+export interface WorldPackInfo {
+  format: number
+  app: string
+  name: string
+  mcVersion: string
+  createdAt: number
+  fileCount: number
+  bytes: number
+  /** 对全部条目排序后再算的 sha1，用来一眼判断包有没有被动过 */
+  digest: string
+}
+
+/** 校验时发现的问题 */
+export interface PackProblem {
+  path: string
+  kind: 'missing' | 'size' | 'sha1' | 'unsafe' | 'extra'
+  detail?: string
+}
+
+/** 存档包校验结果 */
+export interface WorldPackCheck {
+  ok: boolean
+  /** 包里有没有 WFMC 的校验清单；老 zip 没有就只能按普通压缩包解 */
+  signed: boolean
+  info?: WorldPackInfo
+  /** 实际校验过的文件数 */
+  checked: number
+  problems: PackProblem[]
+}
+
+/** 打包结果 */
+export interface WorldPackResult {
+  path: string
+  info: WorldPackInfo
+  /** 生成的 zip 大小 */
+  zipBytes: number
+}
+
+/** 恢复结果 */
+export interface WorldRestoreResult {
+  dir: string
+  name: string
+  fileCount: number
+  bytes: number
+  /** 目标目录已存在同名存档时自动改名了 */
+  renamed: boolean
+  check: WorldPackCheck
+}

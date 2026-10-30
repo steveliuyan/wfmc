@@ -17,7 +17,10 @@ import type {
   SavedServer,
   ServerStatus,
   Settings,
-  ThemeMode
+  ThemeMode,
+  WorldPackCheck,
+  WorldPackResult,
+  WorldRestoreResult
 } from '../shared/types'
 
 const bridge = (
@@ -418,6 +421,13 @@ export const api = {
   musicImport: () => call<{ name: string; path: string; size: number }[]>('music:import'),
   musicRemove: (name: string) => call<{ name: string; path: string; size: number }[]>('music:remove', name),
   musicOpenDir: () => call<void>('music:open-dir'),
+
+  // ---- 存档打包 / 恢复 ----
+  packWorld: (instanceId: string, world: string) =>
+    call<WorldPackResult | undefined>('world:pack', instanceId, world),
+  inspectWorldPack: (zipPath?: string) => call<WorldPackCheck | undefined>('world:inspect', zipPath),
+  restoreWorld: (instanceId: string) =>
+    call<WorldRestoreResult | undefined>('world:restore', instanceId),
 
   // ---- 数据包 ----
   worlds: (instanceId: string) => call<string[]>('content:worlds', instanceId),
