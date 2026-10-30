@@ -10,6 +10,7 @@ import { ensureNatives } from './natives'
 import { listContent } from './content'
 import { ensureGamePath, resourcePathFor } from './paths'
 import { ensureInjector } from './authlib'
+import { diagnoseMods } from './moddoctor'
 
 type LogFn = (instanceId: string, line: string) => void
 type StateFn = (payload: LaunchStatePayload) => void
@@ -107,6 +108,25 @@ export async function launchInstance(
         instance.id,
         `[WFMC] 注意：这是原版（vanilla）实例，mods 里的 ${modCount} 个模组不会被加载；要玩模组得先给这个实例装 Fabric / Forge / NeoForge 加载器。`
       )
+    }
+  }
+
+  // 加载器不对的模组不会被加载，启动时说一句，别让用户对着空 mods 猜
+  if (instance.loader !== 'vanilla') {
+    try {
+      const modsDir = path.join(gameDir, 'mods')
+      const jars = fs.existsSync(modsDir)
+        ? fs.readdirSync(modsDir).filter((n) => n.toLowerCase().endsWith('.jar'))
+        : []
+      if (jars.length > 0 && jars.length <= 60) {
+        const { issues } = diagnoseMods(instance.id)
+        const bad = issues.find((i) => i.title.startsWith('加载器不匹配'))
+        if (bad) {
+          onLog(instance.id, `[WFMC] 注意：${bad.detail}`)
+        }
+      }
+    } catch {
+      /* 体检失败就算了，别影响启动 */
     }
   }
 

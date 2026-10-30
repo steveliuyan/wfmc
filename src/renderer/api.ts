@@ -171,6 +171,7 @@ export interface ModIssue {
   title: string
   detail: string
   files?: string[]
+  fixLoader?: 'fabric' | 'forge' | 'neoforge' | 'quilt'
 }
 
 export interface ModUpdateItem {  file: string

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { api, formatSize, type ModIssue, type ModUpdateItem } from '../api'
+import { api, formatSize, friendlyError, type ModIssue, type ModUpdateItem } from '../api'
 import { useLauncher, useT } from '../store'
 import type { ContentItem, ContentKind, CrashDiagnosis, CrashReport } from '../../shared/types'
 import type { PageId } from '../App'
@@ -19,7 +19,8 @@ const tabs: { id: Tab; label: string }[] = [
 ]
 
 export default function Manage({ goto }: { goto: (p: PageId) => void }) {
-  const { current, currentId, toast, logs, clearLogs, askConfirm, instances, settings, saveSettings } = useLauncher()
+  const { current, currentId, toast, logs, clearLogs, askConfirm, instances, settings, saveSettings, refreshInstances } =
+    useLauncher()
   const t = useT()
   const [tab, setTab] = useState<Tab>('mods')
   // 内容管理自己的目标实例：不用跑回首页/实例页去切
@@ -239,6 +240,33 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                     {issue.title}
                   </div>
                   <div className="diag-advice">{issue.detail}</div>
+                  {issue.fixLoader && (
+                    <div className="row wrap" style={{ marginTop: 8 }}>
+                      <button
+                        className="btn sm primary"
+                        onClick={async () => {
+                          const ld = issue.fixLoader!
+                          const label = ld === 'fabric' ? 'Fabric' : ld === 'forge' ? 'Forge' : ld === 'neoforge' ? 'NeoForge' : 'Quilt'
+                          try {
+                            toast(`正在拉 ${label} 版本…`, 'info')
+                            const list = await api.loaderVersions(ld, target?.mcVersion ?? '')
+                            const ver = list[0]?.value
+                            if (!ver) return toast(`没找到 ${label} 给 ${target?.mcVersion} 用的版本`, 'error')
+                            toast(`开始装 ${label} ${ver}，进度看右下角`, 'info')
+                            await api.installLoader(activeId, ld, ver)
+                            toast(`装好了：${label} ${ver}，模组下次启动就会加载`, 'success')
+                            await refreshInstances()
+                            setModIssues([])
+                          } catch (e) {
+                            toast(`装加载器失败：${friendlyError(e)}`, 'error')
+                          }
+                        }}
+                      >
+                        换成 {issue.fixLoader === 'neoforge' ? 'NeoForge' : issue.fixLoader === 'fabric' ? 'Fabric' : issue.fixLoader === 'forge' ? 'Forge' : 'Quilt'} 加载器
+                      </button>
+                      <span className="muted small">装完自动切过去，存档 / mods 都不动</span>
+                    </div>
+                  )}
                   {issue.files && issue.files.length > 0 && (
                     <code className="diag-evidence">{issue.files.slice(0, 8).join('\n')}</code>
                   )}

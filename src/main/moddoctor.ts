@@ -10,6 +10,8 @@ export interface ModIssue {
   title: string
   detail: string
   files?: string[]
+  /** 这条问题的「一键修复」= 给实例装这个加载器（模组要它，而实例装的不是它） */
+  fixLoader?: 'fabric' | 'forge' | 'neoforge' | 'quilt'
 }
 
 interface ModMeta {
@@ -138,8 +140,9 @@ export function diagnoseMods(instanceId: string): { mods: ModMeta[]; issues: Mod
       issues.push({
         level: 'error',
         title: `加载器不匹配（当前 ${expected}）`,
-        detail: `${mismatch.length} 个 mod 是给 ${need.join(' / ')} 用的，当前实例是 ${expected}，启动时它们会被直接忽略。要玩它们就点上面「加载器」面板装 ${need.join(' / ')} 并切过去；不玩就把这几个文件删掉。`,
-        files: mismatch.map((m) => m.file)
+        detail: `${mismatch.length} 个 mod 是给 ${need.join(' / ')} 用的，当前实例是 ${expected}，启动时它们会被直接忽略。要玩它们就点下面「换成 ${need[0]}」一键装好并切过去；不玩就把这几个文件删掉。`,
+        files: mismatch.map((m) => m.file),
+        fixLoader: need.length === 1 ? (need[0] as ModIssue['fixLoader']) : undefined
       })
     }
   }
