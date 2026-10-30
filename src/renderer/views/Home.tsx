@@ -68,6 +68,16 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
   const pressTimer = useRef<number | undefined>(undefined)
   const rafRef = useRef(0)
   const prevRects = useRef<Map<string, DOMRect> | null>(null)
+  const lastSwap = useRef(0)
+  // 便携版看不到实例时，用它把「便携版目录 vs 本机安装版目录」讲清楚
+  const [sharedInfo, setSharedInfo] = useState<Awaited<ReturnType<typeof api.dataSharedInfo>> | undefined>()
+  useEffect(() => {
+    if (instances.length > 0) return
+    api
+      .dataSharedInfo()
+      .then(setSharedInfo)
+      .catch(() => undefined)
+  }, [instances.length])
 
   useEffect(() => {
     layoutRef.current = layout
@@ -98,21 +108,29 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
       rafRef.current = requestAnimationFrame(() => setDragPos({ x: nx, y: ny }))
 
       const slots = Array.from(gridRef.current?.querySelectorAll('[data-slot]') ?? []) as HTMLElement[]
+      // 命中判定要「进得够深」：只看指针是否落在矩形里的话，卡片贴边时会两块同时命中，
+      // 加上换位后又立刻命中回来，就变成两格来回闪。所以要求指针进到格子中间 56% 的区域。
       const over = slots.find((c) => {
         if (c.dataset.slot === dragId) return false
         const r = c.getBoundingClientRect()
-        return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
+        const ix = r.width * 0.22
+        const iy = r.height * 0.22
+        return e.clientX >= r.left + ix && e.clientX <= r.right - ix && e.clientY >= r.top + iy && e.clientY <= r.bottom - iy
       })
       const overId = over?.dataset.slot
-      if (!overId) return
+      // 刚换过位就歇 260ms，别让指针在缝上抽一下又换回去（这就是「快速闪烁」的来源）
+      if (!overId || Date.now() - lastSwap.current < 260) return
       setLayout((prev) => {
         const from = prev.indexOf(dragId)
         const to = prev.indexOf(overId)
         if (from < 0 || to < 0 || from === to) return prev
         prevRects.current = snapshot()
+        // 两块**对调**（不是把拖的那块插进去、其它整体挪一格）：
+        // 大卡和小卡互换位置时，这样才符合「我拖到哪、它就来这、原来那个去我那」的直觉
         const next = [...prev]
-        next.splice(from, 1)
-        next.splice(to, 0, dragId)
+        next[from] = overId
+        next[to] = dragId
+        lastSwap.current = Date.now()
         return next
       })
     }
@@ -368,10 +386,57 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
       {instances.length === 0 && (
         <div className="card empty">
           <h2>还没有任何实例</h2>
-          <p className="muted">去「下载游戏」装一个原版或整合包，或者到「实例」里手动新建。</p>
-          <button className="btn primary" onClick={() => goto('download')}>
-            去下载游戏
-          </button>
+          {sharedInfo && sharedInfo.portable && sharedInfo.sharedInstances > 0 && !sharedInfo.usingShared ? (
+            <>
+              <p className="muted">
+                你现在开的是<b>便携版</b>，它的数据放在 exe 旁边的{' '}
+                <code className="small">{sharedInfo.ownDir}</code> 里，所以这里是空的。
+                <br />
+                但这台电脑上已经有一份数据：<b>{sharedInfo.sharedInstances}</b> 个实例，
+                约 <b>{Math.max(1, Math.round(sharedInfo.sharedBytes / 1024 / 1024))} MB</b>（
+                <code className="small">{sharedInfo.sharedDir}</code>）。要用哪一份？
+              </p>
+              <div className="row wrap">
+                <button
+                  className="btn primary"
+                  onClick={async () => {
+                    try {
+                      const r = await api.useSharedData(true)
+                      toast(`已切到本机数据：${r.instances} 个实例、${r.accounts} 个账号`, 'success')
+                      await refreshInstances()
+                      setSharedInfo(await api.dataSharedInfo().catch(() => undefined))
+                    } catch (e) {
+                      toast(`切换失败：${friendlyError(e)}`, 'error')
+                    }
+                  }}
+                >
+                  用本机这份数据（推荐，不占额外空间）
+                </button>
+                <button className="btn" onClick={() => goto('download')}>
+                  就用便携版自己的目录，去下载游戏
+                </button>
+              </div>
+              <p className="muted small">
+                切换只是改「指向哪个目录」，不会复制也不会删文件；以后想改回来，到「设置 → 数据目录」里换回去就行。
+              </p>
+            </>
+          ) : sharedInfo?.usingShared ? (
+            <>
+              <p className="muted">
+                便携版现在用的是本机那份数据（<code className="small">{sharedInfo.currentDir}</code>），但里面也没有实例。
+              </p>
+              <button className="btn primary" onClick={() => goto('download')}>
+                去下载游戏
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="muted">去「下载游戏」装一个原版或整合包，或者到「实例」里手动新建。</p>
+              <button className="btn primary" onClick={() => goto('download')}>
+                去下载游戏
+              </button>
+            </>
+          )}
         </div>
       )}
 

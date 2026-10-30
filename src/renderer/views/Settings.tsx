@@ -20,7 +20,14 @@ const JVM_PRESETS: { label: string; value: string }[] = [
 ]
 
 export default function SettingsView() {
-  const { settings, saveSettings, dataDir, accounts, refreshAccounts, toast, current, resolvedTheme, setTheme, askConfirm } = useLauncher()
+  const { settings, saveSettings, dataDir, accounts, refreshAccounts, refreshInstances, toast, current, resolvedTheme, setTheme, askConfirm } = useLauncher()
+  const [pinfo, setPinfo] = useState<Awaited<ReturnType<typeof api.dataSharedInfo>> | undefined>()
+  useEffect(() => {
+    api
+      .dataSharedInfo()
+      .then(setPinfo)
+      .catch(() => undefined)
+  }, [])
   const t = useT()
   const [javas, setJavas] = useState<JavaInfo[]>([])
   const [offlineName, setOfflineName] = useState('Steve')
@@ -390,6 +397,36 @@ export default function SettingsView() {
             打开数据目录
           </button>
         </div>
+        {pinfo?.portable && (
+          <div className="row wrap" style={{ marginTop: 8 }}>
+            <span className="muted small">便携版数据来源：</span>
+            <button
+              className={`btn sm ${pinfo.usingShared ? 'primary' : ''}`}
+              onClick={async () => {
+                const r = await api.useSharedData(true)
+                await saveSettings({ dataDir: r.dir, useSharedData: true })
+                await Promise.all([refreshInstances(), refreshAccounts()])
+                setPinfo(await api.dataSharedInfo())
+                toast(`已切到本机数据：${r.instances} 个实例`, 'success')
+              }}
+            >
+              用本机的（{pinfo.sharedInstances} 个实例）
+            </button>
+            <button
+              className={`btn sm ${!pinfo.usingShared ? 'primary' : ''}`}
+              onClick={async () => {
+                const r = await api.useSharedData(false)
+                await saveSettings({ dataDir: r.dir, useSharedData: false })
+                await Promise.all([refreshInstances(), refreshAccounts()])
+                setPinfo(await api.dataSharedInfo())
+                toast('已切回便携版自己的目录', 'success')
+              }}
+            >
+              用便携版自己的（{pinfo.ownInstances} 个实例）
+            </button>
+            <span className="muted small">只是换指向，不复制也不删文件。</span>
+          </div>
+        )}
         <p className="muted small">
           每个实例默认用全局内存值，也可以到「实例 → 设置」单独覆盖。
           {current ? ` 当前实例：${current.name}` : ''}

@@ -5,6 +5,8 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 export interface Settings {
   /** 数据根目录（实例、运行时、配置文件都在这） */
   dataDir: string
+  /** 便携版专用：true = 直接用本机安装版的那份数据（%APPDATA%/WFMC/data），false = 用自己的 WFMC-Data */
+  useSharedData?: boolean
   /** 界面主题 */
   theme: ThemeMode
   /** 下载源：official = 官方，mirror = 国内镜像(BMCLAPI) */

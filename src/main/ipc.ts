@@ -141,6 +141,63 @@ export function registerIpc() {
     return next
   })
 
+  // ---------- 便携版：让用户自己选「用哪份数据」 ----------
+  // 便携版的数据目录是 <exe 同目录>\WFMC-Data，和安装版的 %APPDATA%\WFMC\data 是两套。
+  // 所以从便携版打开时会看到「还没有实例」——不是数据丢了，是它在看另一个空目录。
+  ipcMain.handle('data:shared-info', () => {
+    const portable = !!process.env.PORTABLE_EXECUTABLE_DIR
+    const ownDir = path.join(process.env.PORTABLE_EXECUTABLE_DIR ?? app.getPath('userData'), 'WFMC-Data')
+    const sharedDir = store.sharedDataDir()
+    const countIn = (dir: string) => {
+      try {
+        const p = path.join(dir, 'instances')
+        return fs
+          .readdirSync(p, { withFileTypes: true })
+          .filter((d) => d.isDirectory() && fs.existsSync(path.join(p, d.name, 'instance.json'))).length
+      } catch {
+        return 0
+      }
+    }
+    const bytesIn = (dir: string) => {
+      const walk = (d: string, depth: number): number => {
+        if (depth > 4) return 0
+        let sum = 0
+        try {
+          for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+            if (e.name === 'libraries' || e.name === 'assets') continue
+            const full = path.join(d, e.name)
+            if (e.isDirectory()) sum += walk(full, depth + 1)
+            else {
+              try {
+                sum += fs.statSync(full).size
+              } catch {
+                /* 跳过读不到的 */
+              }
+            }
+          }
+        } catch {
+          /* 目录不存在 */
+        }
+        return sum
+      }
+      return walk(dir, 0)
+    }
+    return {
+      portable,
+      ownDir,
+      sharedDir,
+      usingShared: !!store.settings.useSharedData,
+      currentDir: store.dataDir,
+      ownInstances: countIn(ownDir),
+      sharedInstances: countIn(sharedDir),
+      sharedBytes: countIn(sharedDir) > 0 ? bytesIn(sharedDir) : 0
+    }
+  })
+  ipcMain.handle('data:use-shared', async (_e, on: boolean) => {
+    const dir = store.setSharedData(on)
+    return { dir, instances: store.listInstances().length, accounts: store.accounts.length }
+  })
+
   ipcMain.handle('dialog:pick-file', async (_e, filters?: { name: string; extensions: string[] }[]) => {
     const res = await dialog.showOpenDialog({
       properties: ['openFile'],

@@ -198,6 +198,20 @@ export const api = {
   getSettings: () => call<Settings>('settings:get'),
   setSettings: (patch: Partial<Settings>) => call<Settings>('settings:set', patch),
   setTheme: (theme: ThemeMode) => call<Settings>('settings:set', { theme }),
+  /** 便携版/安装版的数据目录对照：便携版看不到实例时用它解释清楚 */
+  dataSharedInfo: () =>
+    call<{
+      portable: boolean
+      ownDir: string
+      sharedDir: string
+      usingShared: boolean
+      currentDir: string
+      ownInstances: number
+      sharedInstances: number
+      sharedBytes: number
+    }>('data:shared-info'),
+  useSharedData: (on: boolean) =>
+    call<{ dir: string; instances: number; accounts: number }>('data:use-shared', on),
 
   pickFile: () => call<string | undefined>('dialog:pick-file'),
   pickFiles: () => call<string[]>('dialog:pick-files'),

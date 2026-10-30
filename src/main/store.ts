@@ -121,10 +121,13 @@ class Store {
     this._settings = readJson(this.settingsFile, defaultSettings())
     // 旧配置里的 dataDir 如果还是旧路径，自动纠到新默认目录（并写回，避免每次都纠）
     let corrected = false
-    // 便携版：数据永远跟着 exe 走
-    if (process.env.PORTABLE_EXECUTABLE_DIR && this._settings.dataDir !== defaultDataDir()) {
-      this._settings.dataDir = defaultDataDir()
-      corrected = true
+    // 便携版：数据默认跟着 exe 走；用户可以显式选择「用本机已有的那份数据」（useSharedData）
+    if (process.env.PORTABLE_EXECUTABLE_DIR) {
+      const want = this._settings.useSharedData ? this.sharedDataDir() : defaultDataDir()
+      if (this._settings.dataDir !== want) {
+        this._settings.dataDir = want
+        corrected = true
+      }
     }
     if (!this._settings.dataDir || this._settings.dataDir.includes('zhudong-mc-launcher')) {
       this._settings.dataDir = defaultDataDir()
@@ -183,6 +186,29 @@ class Store {
 
   get dataDir() {
     return this._settings.dataDir || defaultDataDir()
+  }
+
+  /** 本机「安装版」的数据目录——便携版想借用已有数据时指向这里 */
+  sharedDataDir() {
+    return path.join(app.getPath('appData'), 'WFMC', 'data')
+  }
+
+  /** 便携版切换数据来源：true = 用本机已安装的那份，false = 用自己的 WFMC-Data */
+  setSharedData(on: boolean) {
+    const dir = on ? this.sharedDataDir() : defaultDataDir()
+    this.setSettings({ useSharedData: on, dataDir: dir })
+    this.reloadAccounts()
+    return dir
+  }
+
+  /** 换数据目录之后账号也要重读（实例列表是按需读盘的，不用管） */
+  reloadAccounts() {
+    const raw = readJson<{ accounts: Account[] }>(this.accountsFile, { accounts: [] })
+    this._accounts = (Array.isArray(raw.accounts) ? raw.accounts : []).map((a) => ({
+      ...a,
+      accessToken: decryptToken(a.accessToken) ?? '',
+      refreshToken: decryptToken(a.refreshToken)
+    }))
   }
 
   get instancesDir() {
