@@ -175,6 +175,9 @@ export interface ModIssue {
   detail: string
   files?: string[]
   fixLoader?: 'fabric' | 'forge' | 'neoforge' | 'quilt'
+  /** 缺的前置 modid，可直接一键装 */
+  fixDep?: string
+  depRange?: string
 }
 
 export interface ModUpdateItem {  file: string
@@ -230,6 +233,21 @@ export const api = {
       coveredCount: number
       mods: { id: string; name: string; covered: boolean; selfChinese: boolean }[]
     }>('langpack:inspect', id),
+  /** 一个资源包里到底翻了哪些模组 */
+  packContents: (id: string, zipName: string) =>
+    call<{
+      name: string
+      size: number
+      isLangPack: boolean
+      title?: string
+      description?: string
+      files: { id: string; keys: number; entry: string }[]
+      others: string[]
+      totalEntries: number
+    }>('langpack:contents', id, zipName),
+  /** 删一个资源包（顺手清 options.txt）；不传名字就卸载全部汉化包 */
+  removePack: (id: string, zipName?: string) =>
+    call<{ removed: string | string[]; lines: boolean }>('langpack:remove', id, zipName),
   deleteInstance: (id: string, removeFiles: boolean) => call<void>('instance:delete', id, removeFiles),
   duplicateInstance: (id: string, name?: string) => call<Instance>('instance:duplicate', id, name),
   exportInstance: (id: string) => call<string>('instance:export', id),
@@ -488,8 +506,14 @@ export const api = {
       'mods:diagnose',
       instanceId
     ),
-  exportMrpack: (instanceId: string) => call<string>('modpack:export-mrpack', instanceId),
-  inspectMrpack: (file: string) =>
+  /** 一键补前置：给一串 modid，自动去 Modrinth 找对应项目并装（连带它自己的前置） */
+  fixModDeps: (instanceId: string, modids: string[]) =>
+    call<{
+      items: { modid: string; projectId?: string; title?: string; status: 'installed' | 'skipped' | 'failed'; detail?: string }[]
+      installed: string[]
+      failed: number
+    }>('mods:fix-deps', instanceId, modids),
+  exportMrpack: (instanceId: string) => call<string>('modpack:export-mrpack', instanceId),  inspectMrpack: (file: string) =>
     call<{ name?: string; versionId?: string; files: number; deps?: Record<string, string> }>('modpack:inspect', file),
 
   onProgress: (cb: (p: ProgressPayload) => void) => bridge.on('event:progress', cb),

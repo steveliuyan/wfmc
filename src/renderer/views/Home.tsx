@@ -25,7 +25,8 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
     clearLogs,
     settings,
     saveSettings,
-    refreshInstances
+    refreshInstances,
+    runningTask
   } = useLauncher()
   const t = useT()
   const [busy, setBusy] = useState(false)
@@ -45,14 +46,28 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
     })
   }
   const activeProgress = Object.values(progress).filter((p) => p.total && !p.done)
+  // 一个操作没跑完，别的按钮一律锁住（不然校验还没完就能点启动，两个任务抢同一批文件）
+  const locked = busy || !!runningTask
+  const workingText = busy
+    ? '处理中…'
+    : runningTask?.title?.includes('校验')
+      ? '校验中…'
+      : runningTask
+        ? '有任务在跑…'
+        : ''
 
-  // ── 主页布局：下面三块卡片可以按住拖动换位置，顺序存进 settings.homeLayout ──
+  // ── 主页布局：三块卡片可以按住拖起来，像手机桌面那样浮在空中换位置 ──
   const [layout, setLayout] = useState<string[]>(() => normalizeLayout(settings?.homeLayout))
   const layoutRef = useRef(layout)
   const [editing, setEditing] = useState(false)
   const [dragId, setDragId] = useState<string | null>(null)
+  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null)
+  const [ghost, setGhost] = useState({ w: 0, h: 0 })
+  const dragOffset = useRef({ x: 0, y: 0 })
   const gridRef = useRef<HTMLDivElement>(null)
   const pressTimer = useRef<number | undefined>(undefined)
+  const rafRef = useRef(0)
+  const prevRects = useRef<Map<string, DOMRect> | null>(null)
 
   useEffect(() => {
     layoutRef.current = layout
@@ -63,20 +78,38 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
     setLayout((prev) => (next.join('|') === prev.join('|') ? prev : next))
   }, [settings?.homeLayout])
 
+  /** 记录当前每个格子在哪，重排之后按差值补间（FLIP），卡片才会「滑」过去而不是瞬移 */
+  const snapshot = () => {
+    const m = new Map<string, DOMRect>()
+    gridRef.current?.querySelectorAll('[data-slot]').forEach((el) => {
+      const node = el as HTMLElement
+      const id = node.dataset.slot
+      if (id) m.set(id, node.getBoundingClientRect())
+    })
+    return m
+  }
+
   useEffect(() => {
     if (!dragId) return
     const move = (e: PointerEvent) => {
-      const cards = Array.from(gridRef.current?.querySelectorAll('[data-block]') ?? []) as HTMLElement[]
-      const over = cards.find((c) => {
+      const nx = e.clientX - dragOffset.current.x
+      const ny = e.clientY - dragOffset.current.y
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = requestAnimationFrame(() => setDragPos({ x: nx, y: ny }))
+
+      const slots = Array.from(gridRef.current?.querySelectorAll('[data-slot]') ?? []) as HTMLElement[]
+      const over = slots.find((c) => {
+        if (c.dataset.slot === dragId) return false
         const r = c.getBoundingClientRect()
         return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
       })
-      const overId = over?.dataset.block
-      if (!overId || overId === dragId) return
+      const overId = over?.dataset.slot
+      if (!overId) return
       setLayout((prev) => {
         const from = prev.indexOf(dragId)
         const to = prev.indexOf(overId)
         if (from < 0 || to < 0 || from === to) return prev
+        prevRects.current = snapshot()
         const next = [...prev]
         next.splice(from, 1)
         next.splice(to, 0, dragId)
@@ -84,23 +117,58 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
       })
     }
     const up = () => {
+      cancelAnimationFrame(rafRef.current)
       setDragId(null)
+      setDragPos(null)
       saveSettings({ homeLayout: layoutRef.current }).catch(() => undefined)
       toast('布局已保存', 'success')
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
     return () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragId])
 
-  const beginPress = (id: string) => {
+  // 让位动画：被挤走的卡片从旧位置滑到新位置
+  useEffect(() => {
+    const prev = prevRects.current
+    if (!prev) return
+    prevRects.current = null
+    gridRef.current?.querySelectorAll('[data-slot]').forEach((el) => {
+      const node = el as HTMLElement
+      const id = node.dataset.slot
+      if (!id) return
+      const before = prev.get(id)
+      if (!before) return
+      const after = node.getBoundingClientRect()
+      const dx = before.left - after.left
+      const dy = before.top - after.top
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return
+      node.animate(
+        [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }],
+        { duration: 260, easing: 'cubic-bezier(.22, .9, .24, 1)' }
+      )
+    })
+  }, [layout])
+
+  const beginPress = (e: React.PointerEvent, id: string) => {
     if (!editing || dragId) return
+    if (e.button !== 0) return
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    dragOffset.current = { x: e.clientX - r.left, y: e.clientY - r.top }
+    const size = { w: r.width, h: r.height }
     window.clearTimeout(pressTimer.current)
-    pressTimer.current = window.setTimeout(() => setDragId(id), 160)
+    // 按住 140ms 才算「拿起」，短按还是正常的点击
+    pressTimer.current = window.setTimeout(() => {
+      setGhost(size)
+      setDragPos({ x: e.clientX - dragOffset.current.x, y: e.clientY - dragOffset.current.y })
+      setDragId(id)
+    }, 140)
   }
   const endPress = () => {
     if (!dragId) window.clearTimeout(pressTimer.current)
@@ -276,6 +344,7 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
               className="btn ghost sm"
               onClick={() => {
                 const def = [...BLOCK_IDS]
+                prevRects.current = snapshot()
                 setLayout(def)
                 saveSettings({ homeLayout: def }).catch(() => undefined)
                 toast('已恢复默认布局', 'info')
@@ -292,7 +361,7 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
 
       {editing && (
         <div className="layout-hint">
-          <i>⠿</i> 按住下面的卡片拖动就能换位置，松手自动保存。上面那块大卡片固定不动。
+          <i>⠿</i> 按住卡片把它「拿起来」，其它卡片会自动让位，松手就放到那儿并保存。上面那块大卡片固定不动。
         </div>
       )}
 
@@ -342,14 +411,14 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
                   结束游戏
                 </button>
               ) : (
-                <button className="btn primary lg" disabled={busy} onClick={launch}>
-                  {busy ? '处理中…' : '启动游戏'}
+                <button className="btn primary lg" disabled={locked} onClick={launch}>
+                  {locked ? workingText || '处理中…' : '启动游戏'}
                 </button>
               )}
-              <button className="btn" disabled={busy} onClick={() => runTask(() => api.installGame(current.id), '安装完成')}>
+              <button className="btn" disabled={locked} onClick={() => runTask(() => api.installGame(current.id), '安装完成')}>
                 重新安装
               </button>
-              <button className="btn" disabled={busy} onClick={() => runTask(() => api.repairGame(current.id), '文件校验完成')}>
+              <button className="btn" disabled={locked} onClick={() => runTask(() => api.repairGame(current.id), '文件校验完成')}>
                 校验文件
               </button>
               <button className="btn ghost" onClick={() => api.openInstanceFolder(current.id)}>
@@ -380,43 +449,66 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
         </div>
       )}
 
-      {activeProgress.length > 0 && (
-        <div className="card">
-          <h3>进行中</h3>
-          {activeProgress.map((p, idx) => {
-            const pct = p.total ? Math.min(100, Math.round(((p.current ?? 0) / p.total) * 100)) : 0
-            return (
-              <div className="progress-row" key={idx}>
-                <div className="progress-label">
-                  <span>{p.phase}</span>
-                  <span className="muted">
-                    {p.current ?? 0}/{p.total ?? 0}
-                  </span>
+      {/* 进行中：用 0fr→1fr 折叠，出现/收起都是滑出来的，不会硬生生顶上来 */}
+      <div className={`progress-fold ${activeProgress.length > 0 ? 'open' : ''}`}>
+        <div>
+          <div className="card">
+            <h3>进行中</h3>
+            {activeProgress.map((p, idx) => {
+              const pct = p.total ? Math.min(100, Math.round(((p.current ?? 0) / p.total) * 100)) : 0
+              return (
+                <div className="progress-row" key={idx}>
+                  <div className="progress-label">
+                    <span>{p.phase}</span>
+                    <span className="muted">
+                      {p.current ?? 0}/{p.total ?? 0}
+                    </span>
+                  </div>
+                  <div className="bar">
+                    <i style={{ width: `${pct}%` }} />
+                  </div>
                 </div>
-                <div className="bar">
-                  <i style={{ width: `${pct}%` }} />
-                </div>
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
         </div>
-      )}
+      </div>
 
       <div className={`grid-2 ${editing ? 'editing' : ''}`} ref={gridRef}>
         {layout.map((id) => (
-          <div
-            key={id}
-            data-block={id}
-            className={`card ${editing ? 'movable' : ''} ${dragId === id ? 'dragging' : ''}`}
-            onPointerDown={() => beginPress(id)}
-            onPointerUp={endPress}
-            onPointerLeave={endPress}
-          >
-            {editing && <div className="drag-grip">⠿ {BLOCK_NAMES[id] ?? id} · 按住拖动</div>}
-            {renderBlock(id)}
+          <div key={id} data-slot={id} className="slot">
+            {dragId === id ? (
+              <div className="card placeholder" style={{ height: ghost.h || undefined }}>
+                <span className="placeholder-label">⠿ {BLOCK_NAMES[id] ?? id} 会放在这里</span>
+              </div>
+            ) : (
+              <div
+                className={`card ${editing ? 'movable' : ''}`}
+                onPointerDown={(e) => beginPress(e, id)}
+                onPointerUp={endPress}
+                onPointerCancel={endPress}
+                onPointerLeave={endPress}
+              >
+                {editing && <div className="drag-grip">⠿ {BLOCK_NAMES[id] ?? id} · 按住拖动</div>}
+                {renderBlock(id)}
+              </div>
+            )}
           </div>
         ))}
       </div>
+
+      {/* 拿起来的那张卡浮在鼠标上 */}
+      {dragId && dragPos && (
+        <div
+          className="drag-float"
+          style={{ width: ghost.w || undefined, transform: `translate3d(${dragPos.x}px, ${dragPos.y}px, 0)` }}
+        >
+          <div className="card dragging">
+            <div className="drag-grip">⠿ {BLOCK_NAMES[dragId] ?? dragId}</div>
+            {renderBlock(dragId)}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

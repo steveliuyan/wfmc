@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { Account, Instance, LaunchStatePayload, ProgressPayload, Settings, ThemeMode } from '../shared/types'
-import { api } from './api'
+import { api, type TaskInfo } from './api'
 
 export interface Toast {
   id: number
@@ -23,6 +23,10 @@ interface Ctx {
   accounts: Account[]
   refreshAccounts: () => Promise<void>
   progress: Record<string, ProgressPayload>
+  /** 正在跑的后台任务（用来让按钮互相锁住，一个操作没跑完别点别的） */
+  tasks: TaskInfo[]
+  runningTask?: TaskInfo
+  refreshTasks: () => Promise<void>
   logs: Record<string, string[]>
   launchState: Record<string, LaunchStatePayload>
   toasts: Toast[]
@@ -67,6 +71,7 @@ export function LauncherProvider({ children }: { children: React.ReactNode }) {
   const [currentId, setCurrentId] = useState<string>()
   const [accounts, setAccounts] = useState<Account[]>([])
   const [progress, setProgress] = useState<Record<string, ProgressPayload>>({})
+  const [tasks, setTasks] = useState<TaskInfo[]>([])
   const [logs, setLogs] = useState<Record<string, string[]>>({})
   const [launchState, setLaunchState] = useState<Record<string, LaunchStatePayload>>({})
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -197,6 +202,14 @@ export function LauncherProvider({ children }: { children: React.ReactNode }) {
     // 任务结束（完成/失败/取消）时，把挂着这条任务名的进度条一起清掉：
     // 有些下载链路自己不上报 done，进度条会永远停在 100%
     const offTaskClean = api.onTask((task) => {
+      // 任务表跟着更新：按钮锁、「进行中」面板都靠它
+      setTasks((prev) => {
+        const idx = prev.findIndex((t) => t.id === task.id)
+        if (idx < 0) return [task, ...prev].slice(0, 40)
+        const next = [...prev]
+        next[idx] = task
+        return next
+      })
       if (task.status === 'running') return
       setTimeout(() => {
         setProgress((prev) => {
@@ -221,12 +234,22 @@ export function LauncherProvider({ children }: { children: React.ReactNode }) {
     const offState = api.onLaunchState((p) =>
       setLaunchState((prev) => ({ ...prev, [p.instanceId]: p }))
     )
+    refreshTasks().catch(() => undefined)
     return () => {
       offProgress()
+      offTaskClean()
       offLog()
       offState()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const refreshTasks = useCallback(async () => {
+    try {
+      setTasks(await api.listTasks())
+    } catch {
+      /* 拿不到就算了，按钮锁会退化成只看本地 busy */
+    }
   }, [])
 
   const clearLogs = useCallback((instanceId: string) => {
@@ -243,6 +266,7 @@ export function LauncherProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const current = useMemo(() => instances.find((i) => i.id === currentId), [instances, currentId])
+  const runningTask = useMemo(() => tasks.find((t) => t.status === 'running'), [tasks])
 
   const value: Ctx = {
     ready,
@@ -259,6 +283,9 @@ export function LauncherProvider({ children }: { children: React.ReactNode }) {
     accounts,
     refreshAccounts,
     progress,
+    tasks,
+    runningTask,
+    refreshTasks,
     logs,
     launchState,
     toasts,

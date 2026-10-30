@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { downloadFile } from './net'
-import { enableResourcePack } from './options'
+import { disableResourcePack, enableResourcePack } from './options'
 import { gamePathFor } from './paths'
 import { store } from './store'
 import { listZipEntries, readFileInsideZip } from './zip'
@@ -269,4 +269,125 @@ export function inspectLangPack(instanceId: string): LangCoverage {
   }
 
   return { packs, coveredCount: covered.size, mods }
+}
+
+export interface PackFile {
+  /** assets/<modid>/lang/zh_cn.json 里的 modid */
+  id: string
+  /** 这个模组的中文条目数（语言文件里的键数量） */
+  keys: number
+  /** 语言文件在包里的路径 */
+  entry: string
+}
+
+export interface PackContents {
+  name: string
+  size: number
+  /** 是不是汉化包（有 assets/x/lang/zh_cn.json） */
+  isLangPack: boolean
+  /** pack.mcmeta 里声明的名字 / 描述 */
+  title?: string
+  description?: string
+  /** 按 modid 汇总的中文文件 */
+  files: PackFile[]
+  /** 包里其它文件（预览用，最多 60 条） */
+  others: string[]
+  totalEntries: number
+}
+
+/** 一个资源包里到底装了什么 —— 「我装的这个汉化包翻译了哪些模组」 */
+export function readPackContents(instanceId: string, zipName: string): PackContents {
+  const instance = store.getInstance(instanceId)
+  if (!instance) throw new Error('实例不存在')
+  const zipPath = path.join(gamePathFor(instance), 'resourcepacks', zipName)
+  if (!fs.existsSync(zipPath)) throw new Error('这个包不在了，刷新一下列表')
+  const size = fs.statSync(zipPath).size
+  const buf = fs.readFileSync(zipPath)
+  const entries = listZipEntries(buf)
+
+  const files: PackFile[] = []
+  const others: string[] = []
+  for (const e of entries) {
+    const m = /^assets\/([^/]+)\/lang\/zh_cn\.json$/i.exec(e.name)
+    if (m) {
+      let keys = 0
+      try {
+        const raw = readFileInsideZip(zipPath, e.name)
+        const json = raw ? (JSON.parse(raw.toString('utf8')) as Record<string, unknown>) : {}
+        keys = Object.keys(json).length
+      } catch {
+        keys = 0
+      }
+      files.push({ id: m[1].toLowerCase(), keys, entry: e.name })
+    } else if (others.length < 60) {
+      others.push(e.name)
+    }
+  }
+  files.sort((a, b) => b.keys - a.keys)
+
+  let title: string | undefined
+  let description: string | undefined
+  try {
+    const raw = readFileInsideZip(zipPath, 'pack.mcmeta')
+    if (raw) {
+      const j = JSON.parse(raw.toString('utf8')) as { pack?: { description?: unknown } }
+      const d = j.pack?.description
+      if (typeof d === 'string') description = d
+      else if (d && typeof d === 'object' && 'text' in d) description = String((d as { text: unknown }).text)
+    }
+  } catch {
+    /* 没有 mcmeta 就只显示文件名 */
+  }
+  if (description && description.length < 60) title = description
+
+  return { name: zipName, size, isLangPack: files.length > 0, title, description, files, others, totalEntries: entries.length }
+}
+
+/** 删一个资源包文件，并把 options.txt 里对应的条目一起摘掉 */
+export function removePack(instanceId: string, zipName: string): { removed: string; lines: boolean } {
+  const instance = store.getInstance(instanceId)
+  if (!instance) throw new Error('实例不存在')
+  const gameDir = gamePathFor(instance)
+  const zipPath = path.join(gameDir, 'resourcepacks', zipName)
+  const lines = disableResourcePack(gameDir, zipName)
+  if (fs.existsSync(zipPath)) fs.rmSync(zipPath, { force: true })
+  return { removed: zipName, lines }
+}
+
+/**
+ * 一键卸载所有汉化包：找出 resourcepacks 里有 assets/x/lang/zh_cn.json 的 zip 全删，
+ * 顺手把 options.txt 的引用清掉（不留悬空条目）。
+ */
+export function removeLangPacks(instanceId: string): { removed: string[]; lines: boolean } {
+  const instance = store.getInstance(instanceId)
+  if (!instance) throw new Error('实例不存在')
+  const gameDir = gamePathFor(instance)
+  const rpDir = path.join(gameDir, 'resourcepacks')
+  const removed: string[] = []
+  let lines = false
+  if (!fs.existsSync(rpDir)) return { removed, lines }
+  for (const z of fs.readdirSync(rpDir)) {
+    if (!z.toLowerCase().endsWith('.zip')) continue
+    const p = path.join(rpDir, z)
+    let isLang = false
+    try {
+      for (const e of listZipEntries(fs.readFileSync(p))) {
+        if (/^assets\/[^/]+\/lang\/zh_cn\.json$/i.test(e.name)) {
+          isLang = true
+          break
+        }
+      }
+    } catch {
+      isLang = false
+    }
+    if (!isLang) continue
+    if (disableResourcePack(gameDir, z)) lines = true
+    try {
+      fs.rmSync(p, { force: true })
+      removed.push(z)
+    } catch {
+      /* 删不掉（被占用）就跳过 */
+    }
+  }
+  return { removed, lines }
 }

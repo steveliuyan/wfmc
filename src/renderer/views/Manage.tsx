@@ -45,6 +45,16 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     mods: { id: string; name: string; covered: boolean; selfChinese: boolean }[]
   }>()
   const [worlds, setWorlds] = useState<string[]>([])
+  const [packView, setPackView] = useState<{
+    name: string
+    size: number
+    isLangPack: boolean
+    title?: string
+    description?: string
+    files: { id: string; keys: number; entry: string }[]
+    others: string[]
+    totalEntries: number
+  }>()
   const [world, setWorld] = useState('')
   const [packs, setPacks] = useState<ContentItem[]>([])
   const [checking, setChecking] = useState(false)
@@ -213,6 +223,50 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
           ) : (
             <>还没装汉化包。装模组后界面是英文的话，点上面的「装中文汉化包」。</>
           )}
+          {langCov.packs.length > 0 && (
+            <div className="row wrap" style={{ marginTop: 8 }}>
+              <button
+                className="btn sm"
+                onClick={async () => {
+                  const first = langCov.packs[0]
+                  if (!first) return
+                  try {
+                    setPackView(await api.packContents(activeId, first.name))
+                  } catch (e) {
+                    toast(`打不开这个包：${friendlyError(e)}`, 'error')
+                  }
+                }}
+              >
+                看看翻了哪些模组
+              </button>
+              <button
+                className="btn sm danger"
+                onClick={async () => {
+                  if (
+                    !(await askConfirm({
+                      title: '卸载汉化包',
+                      message: `删掉 ${langCov.packs.length} 个汉化包（${langCov.packs.map((p) => p.name).join('、')}）？模组文件不动，只是界面会变回英文。`,
+                      okText: '卸载',
+                      danger: true
+                    }))
+                  )
+                    return
+                  try {
+                    const r = await api.removePack(activeId)
+                    const n = Array.isArray(r.removed) ? r.removed.length : 1
+                    toast(`已卸载 ${n} 个汉化包${r.lines ? '，options.txt 里的引用也清了' : ''}`, 'success')
+                    setLangCov(await api.inspectLangPack(activeId).catch(() => undefined))
+                    await refresh()
+                  } catch (e) {
+                    toast(`卸载失败：${friendlyError(e)}`, 'error')
+                  }
+                }}
+              >
+                卸载汉化包
+              </button>
+              <span className="muted small">删之前会自动清掉 options.txt 里的引用，不留悬空条目</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -303,6 +357,36 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                     {issue.title}
                   </div>
                   <div className="diag-advice">{issue.detail}</div>
+                  {issue.fixDep && (
+                    <div className="row wrap" style={{ marginTop: 8 }}>
+                      <button
+                        className="btn sm primary"
+                        onClick={async () => {
+                          const dep = issue.fixDep!
+                          try {
+                            toast(`正在从 Modrinth 找 ${dep}…`, 'info')
+                            const r = await api.fixModDeps(activeId, [dep])
+                            const ok = r.items.filter((x) => x.status === 'installed')
+                            if (ok.length > 0) {
+                              toast(`装好了：${ok.map((x) => x.title ?? x.modid).join('、')}（连带它自己的前置）`, 'success')
+                            } else {
+                              toast(
+                                `没能自动装 ${dep}：${r.items[0]?.detail ?? 'Modrinth 上没找到对应项目'}。可以到「模组」页搜名字手动装`,
+                                'error'
+                              )
+                            }
+                            setModIssues([])
+                            await refresh()
+                          } catch (e) {
+                            toast(`补前置失败：${friendlyError(e)}`, 'error')
+                          }
+                        }}
+                      >
+                        装上 {issue.fixDep}
+                      </button>
+                      <span className="muted small">自动从 Modrinth 找同名项目，连带它自己的前置一起装</span>
+                    </div>
+                  )}
                   {issue.fixLoader && (
                     <div className="row wrap" style={{ marginTop: 8 }}>
                       <button
@@ -462,7 +546,9 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                 <div className="content-main">
                   <div className="content-name" title={item.name}>
                     {item.title ?? item.name.replace(/\.disabled$/, '')}
-                    {item.version && <span className="badge">v{item.version}</span>}
+                    {item.version && (
+                      <span className="badge">{/^\d/.test(item.version) ? `v${item.version}` : item.version}</span>
+                    )}
                     {item.loader && <span className="badge">{item.loader}</span>}
                     {item.disabled && <span className="badge warn">已禁用</span>}
                     {item.isDir && <span className="badge">目录</span>}
@@ -489,6 +575,20 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                       }}
                     >
                       打包
+                    </button>
+                  )}
+                  {tab === 'resourcepacks' && !item.isDir && /\.zip$/i.test(item.name.replace(/\.disabled$/, '')) && (
+                    <button
+                      className="btn sm"
+                      onClick={async () => {
+                        try {
+                          setPackView(await api.packContents(activeId, item.name.replace(/\.disabled$/, '')))
+                        } catch (e) {
+                          toast(`读不了这个包：${friendlyError(e)}`, 'error')
+                        }
+                      }}
+                    >
+                      内容
                     </button>
                   )}
                   {!item.isDir && (
@@ -814,6 +914,82 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
           <pre className="log" style={{ height: 420, marginTop: 10 }}>
             {lines.length ? lines.join('\n') : '还没有日志，去首页启动一次游戏。'}
           </pre>
+        </div>
+      )}
+
+      {packView && (
+        <div className="dialog-mask" onClick={() => setPackView(undefined)}>
+          <div className="dialog pack-view" onClick={(e) => e.stopPropagation()}>
+            <div className="pack-head">
+              <div>
+                <div className="pack-title">{packView.title ?? packView.name}</div>
+                <div className="muted small">
+                  {formatSize(packView.size)} · 共 {packView.totalEntries} 个文件
+                  {packView.isLangPack
+                    ? ` · 里面有 ${packView.files.length} 个模组的中文`
+                    : ' · 没检测到中文语言文件（不是汉化包，或者是纯贴图/音效的资源包）'}
+                </div>
+                {packView.description && <div className="muted small">{packView.description}</div>}
+              </div>
+              <button className="btn sm" onClick={() => setPackView(undefined)}>
+                关闭
+              </button>
+            </div>
+            {packView.isLangPack ? (
+              <>
+                <div className="pack-sub">
+                  以下是这个包里翻了中文的模组（<b>{packView.files.length}</b> 个）。游戏里按 modid 匹配，装了对应的模组就会自动套用：
+                </div>
+                <div className="pack-list">
+                  {packView.files.map((f) => (
+                    <div className="pack-item" key={f.id}>
+                      <code>{f.id}</code>
+                      <span className="muted small">{f.keys} 条</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="pack-sub">这个包里的其它文件（最多列 60 条）：</div>
+                <div className="pack-list">
+                  {packView.others.map((f) => (
+                    <div className="pack-item" key={f}>
+                      <code>{f}</code>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            <div className="row wrap pack-foot">
+              <button
+                className="btn danger"
+                onClick={async () => {
+                  if (
+                    !(await askConfirm({
+                      title: '删除资源包',
+                      message: `删掉 ${packView.name}？存档和模组不受影响，只是界面/贴图会回到原版。`,
+                      okText: '删除',
+                      danger: true
+                    }))
+                  )
+                    return
+                  try {
+                    const r = await api.removePack(activeId, packView.name)
+                    toast(`已删除${r.lines ? '，options.txt 里的引用也清了' : ''}`, 'success')
+                    setPackView(undefined)
+                    setLangCov(await api.inspectLangPack(activeId).catch(() => undefined))
+                    await refresh()
+                  } catch (e) {
+                    toast(`删除失败：${friendlyError(e)}`, 'error')
+                  }
+                }}
+              >
+                删除这个包
+              </button>
+              <span className="muted small">删之前会先从 options.txt 的启用列表里摘掉，不留悬空条目</span>
+            </div>
+          </div>
         </div>
       )}
     </div>

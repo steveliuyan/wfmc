@@ -11,6 +11,7 @@ import {
   collectDirFiles
 } from './zip'
 import { gamePathFor } from './paths'
+import { disableResourcePack } from './options'
 
 /** 内容所在的游戏数据目录（受「版本隔离」影响） */
 function instanceRoot(instanceId: string) {
@@ -225,6 +226,14 @@ export function toggleContent(instanceId: string, target: string): ContentItem[]
 export function deleteContent(instanceId: string, target: string) {
   const root = instanceRoot(instanceId)
   const full = assertInside(root, target)
+  // 删资源包时把 options.txt 里的 file/xxx.zip 一起摘掉
+  if (path.basename(path.dirname(full)) === 'resourcepacks' && /\.zip$/i.test(full)) {
+    try {
+      disableResourcePack(root, path.basename(full))
+    } catch {
+      /* options.txt 动不了就别拦着删 */
+    }
+  }
   fs.rmSync(full, { recursive: true, force: true })
 }
 

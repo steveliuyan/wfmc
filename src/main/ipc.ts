@@ -80,7 +80,8 @@ import { applyPerfPreset, deleteScreenshot, listScreenshots, PERF_PRESETS, scree
 import { cancelTask, clearFinishedTasks, listTasks, runTask, setTaskEmitter } from './tasks'
 import { applyUpdate, checkReleases, checkUpdate, pickAsset } from './updater'
 import { diagnoseMods } from './moddoctor'
-import { installLangPacks, inspectLangPack } from './langpack'
+import { fixMissingDeps } from './moddeps'
+import { installLangPacks, inspectLangPack, readPackContents, removeLangPacks, removePack } from './langpack'
 import { PACK_EXT, inspectWorldPack, packWorld, restoreWorldPack } from './worldpack'
 import { cleanTempFiles, speedTest } from './speedtest'
 import { importTracks, listTracks, musicDir, removeTrack } from './music'
@@ -239,6 +240,11 @@ export function registerIpc() {
     )
   })
   ipcMain.handle('langpack:inspect', (_e, id: string) => inspectLangPack(id))
+  // 汉化包也是资源包，得能「点进去看包里翻的是哪些模组」和「卸载」
+  ipcMain.handle('langpack:contents', (_e, id: string, zipName: string) => readPackContents(id, zipName))
+  ipcMain.handle('langpack:remove', (_e, id: string, zipName?: string) =>
+    zipName ? removePack(id, zipName) : removeLangPacks(id)
+  )
   ipcMain.handle('instance:open-folder', async (_e, id: string) => {
     await shell.openPath(store.instanceGameDir(id))
   })
@@ -888,12 +894,38 @@ export function registerIpc() {
   )
 
   // ---------- Mod 更新检查 ----------
-  ipcMain.handle('mods:updates', async (_e, instanceId: string) => await checkModUpdates(instanceId, progress))
+  // 包在 runTask 里：① 「进行中」那条进度会跟着任务结束一起收掉（以前会永远停在 0/N）
+  // ② 首页的按钮互斥靠任务状态判断，不包就没有信号
+  ipcMain.handle('mods:updates', async (_e, instanceId: string) => {
+    const instance = store.getInstance(instanceId)
+    return await runTask('mods', `检查 ${instance?.name ?? instanceId} 的模组更新`, async (ctx) => {
+      const res = await checkModUpdates(instanceId, (p) => {
+        progress({ ...p, taskId: ctx.id })
+        ctx.report({ phase: p.phase, current: p.current, total: p.total })
+      })
+      progress({ key: 'mod-updates', phase: '检查完成', current: 1, total: 1, done: true, taskId: ctx.id })
+      return res
+    })
+  })
   ipcMain.handle(
     'mods:apply',
     async (_e, instanceId: string, input: { path: string; url: string; filename: string }) =>
-      await applyModUpdate(instanceId, input, progress)
+      await runTask('mods', `更新模组 ${input.filename}`, async (ctx) =>
+        applyModUpdate(instanceId, input, (p) => {
+          progress({ ...p, taskId: ctx.id })
+          ctx.report({ phase: p.phase, current: p.current, total: p.total })
+        })
+      )
   )
+  ipcMain.handle('mods:fix-deps', async (_e, instanceId: string, modids: string[]) => {
+    const instance = store.getInstance(instanceId)
+    return await runTask('mods', `给 ${instance?.name ?? instanceId} 补前置`, async (ctx) =>
+      fixMissingDeps(instanceId, modids, (p) => {
+        progress({ ...p, taskId: ctx.id })
+        ctx.report({ phase: p.phase, current: p.current, total: p.total })
+      })
+    )
+  })
 
   // ---------- 局域网 / P2P / 内网穿透 ----------
   ipcMain.handle('lan:start', () => lanStart())

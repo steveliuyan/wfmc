@@ -360,7 +360,14 @@ nav {
 .grid-2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  align-items: start;
   gap: 14px;
+}
+
+/* 每个格子独立排布：某一块变高不会把同一行的另一块拉长 */
+.grid-2 > .slot {
+  min-width: 0;
+  display: block;
 }
 
 @media (max-width: 1100px) {
@@ -3027,14 +3034,45 @@ textarea:focus {
 .grid-2.editing .card:hover {
   border-color: var(--accent);
 }
-.grid-2.editing .card.dragging {
+/* ????????????????????????????? */
+.card.dragging {
   cursor: grabbing;
-  transform: scale(1.012);
+  transform: scale(1.02) rotate(-.5deg);
   border-color: var(--accent);
-  box-shadow: 0 20px 44px -22px rgba(0, 0, 0, .45);
+  background: var(--bg-2);
+  box-shadow: 0 30px 60px -24px rgba(0, 0, 0, .45), 0 8px 20px -12px rgba(0, 0, 0, .3);
+  transition: none;
+  opacity: .97;
+  max-height: 78vh;
+  overflow: hidden;
 }
-.grid-2.editing .card.dragging > * {
-  opacity: .55;
+.card.dragging .drag-grip {
+  opacity: 1;
+  color: var(--accent);
+}
+/* ????????????????? */
+.card.placeholder {
+  border: 1.5px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 84px;
+  padding: 18px;
+}
+.placeholder-label {
+  font-size: 12.5px;
+  color: var(--accent);
+  letter-spacing: .3px;
+}
+.drag-float {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 900;
+  pointer-events: none;
+  will-change: transform;
 }
 .drag-grip {
   display: flex;
@@ -3058,4 +3096,81 @@ textarea:focus {
 }
 .warn-text {
   color: #c98110;
+}
+
+/* ── 进行中：0fr → 1fr 展开/收起 ── */
+.progress-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  margin-bottom: 0;
+  transition: grid-template-rows .32s cubic-bezier(.22, .9, .24, 1), opacity .26s ease, margin-bottom .32s ease;
+}
+.progress-fold > div {
+  overflow: hidden;
+  min-height: 0;
+}
+.progress-fold.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  margin-bottom: 14px;
+}
+/* ---------- ????????? ---------- */
+.dialog.pack-view {
+  width: 620px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.pack-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.pack-title {
+  font-size: 15px;
+  font-weight: 700;
+  word-break: break-all;
+}
+.pack-sub {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.7;
+  margin-bottom: 10px;
+}
+.pack-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-3);
+}
+.pack-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: 9px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  overflow: hidden;
+}
+.pack-item code {
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pack-foot {
+  margin-top: 12px;
+  align-items: center;
 }
