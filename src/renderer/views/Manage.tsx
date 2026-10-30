@@ -40,7 +40,7 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
   }, [modIssues])
   const [packOrder, setPackOrder] = useState<string[]>([])
   const [langCov, setLangCov] = useState<{
-    pack: string | null
+    packs: { name: string; count: number }[]
     coveredCount: number
     mods: { id: string; name: string; covered: boolean; selfChinese: boolean }[]
   }>()
@@ -176,9 +176,10 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
 
       {tab === 'mods' && langCov && (
         <div className="notice-bar">
-          {langCov.pack ? (
+          {langCov.packs.length > 0 ? (
             <>
-              汉化包「{langCov.pack}」收录了 <b>{langCov.coveredCount}</b> 个模组的中文。这里的 {langCov.mods.length} 个模组里：
+              已装汉化包：<b>{langCov.packs.map((p) => `${p.name}（${p.count} 个模组）`).join(' + ')}</b>，
+              合计收录 <b>{langCov.coveredCount}</b> 个模组的中文。这里的 {langCov.mods.length} 个模组里：
               {langCov.mods.filter((m) => m.covered || m.selfChinese).length > 0 && (
                 <>
                   {' '}
@@ -368,12 +369,11 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                   try {
                     toast('正在装汉化包，进度看右下角', 'info')
                     const res = await api.installLangPack(activeId)
-                    toast(
-                      `汉化包已装好并启用：${res.name}（${Math.round(res.size / 1024)} KB）${
-                        res.exact ? '' : '，这个 MC 版本没有专门的包，用的是通用版'
-                      }`,
-                      'success'
-                    )
+                    const names = res.packs.map((p) => `${p.source === 'vm' ? 'VM' : 'CFPA'} ${Math.round(p.size / 1024)} KB`)
+                    toast(`已装好并启用 ${res.packs.length} 个汉化包：${names.join(' + ')}`, 'success')
+                    if (res.skipped.length) {
+                      toast(`没装上的：${res.skipped.map((s) => `${s.source}（${s.reason}）`).join('；')}`, 'info')
+                    }
                     await refresh()
                     api.inspectLangPack(activeId).then(setLangCov).catch(() => undefined)
                   } catch (e) {

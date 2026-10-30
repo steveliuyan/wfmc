@@ -19,6 +19,10 @@ const PROJECT = 'vmct'
 const API = 'https://api.modrinth.com/v2'
 const UA = { 'User-Agent': 'WFMC-Launcher/1.0 (Minecraft launcher)' }
 
+/** CFPA（中文模组翻译联盟）的整合语言包 —— 400 个 modid，跟 VM 的 210 个只重叠 48 个，合起来才够用 */
+const CFPA_REPO = 'CFPAOrg/Minecraft-Mod-Language-Package'
+const CFPA_MIRRORS = [(u: string) => `https://gh-proxy.com/${u}`, (u: string) => `https://ghfast.top/${u}`, (u: string) => u]
+
 interface MrVersion {
   id: string
   version_number: string
@@ -56,7 +60,106 @@ export interface LangPackResult {
   packVersion: string
 }
 
-/** 下载汉化包到实例的 resourcepacks/，并写进 options.txt 启用 */
+export interface InstalledPack {
+  name: string
+  source: 'vm' | 'cfpa'
+  size: number
+  version: string
+  exact: boolean
+}
+
+export interface InstallPacksResult {
+  packs: InstalledPack[]
+  /** 没装上的源 + 原因（比如 CFPA 没有这个 MC 版本的分支） */
+  skipped: { source: string; reason: string }[]
+}
+
+function cfpaSuffix(mcVersion: string): string | undefined {
+  const m = /^1\.(\d+)/.exec(mcVersion)
+  return m ? `1-${m[1]}` : undefined
+}
+
+interface CfpaRelease {
+  tag_name: string
+  assets: { name: string; size: number; browser_download_url: string }[]
+}
+
+/** 从 CFPA 的 GitHub release 里挑当前 MC 版本的整合语言包（资产名固定，只有 1.21 分支） */
+async function pickCfpa(mcVersion: string): Promise<{ tag: string; name: string; size: number; url: string } | undefined> {
+  const suffix = cfpaSuffix(mcVersion)
+  if (!suffix) return undefined
+  const res = await fetch(`https://api.github.com/repos/${CFPA_REPO}/releases?per_page=5`, {
+    headers: { ...UA, Accept: 'application/vnd.github+json' },
+    signal: AbortSignal.timeout(20_000)
+  })
+  if (!res.ok) throw new Error(`拉取 CFPA 汉化包列表失败（HTTP ${res.status}）`)
+  const list = (await res.json()) as CfpaRelease[]
+  const want = new RegExp(`^Minecraft-Mod-Language-Modpack-${suffix}\\.zip$`, 'i')
+  for (const rel of list) {
+    const hit = rel.assets.find((a) => want.test(a.name))
+    if (hit) return { tag: rel.tag_name, name: hit.name, size: hit.size, url: hit.browser_download_url }
+  }
+  return undefined
+}
+
+/**
+ * 装汉化包：VM（Modrinth vmct）+ CFPA（GitHub 整合语言包）。
+ * 两个包收录的模组几乎不重叠（210 vs 400，交集 48），一起装上覆盖 560+ 个模组。
+ * 顺序上 VM 放前面（更新更勤），CFPA 放后面。
+ */
+export async function installLangPacks(
+  instanceId: string,
+  onProgress?: (p: { phase: string; current: number; total: number }) => void
+): Promise<InstallPacksResult> {
+  const instance = store.getInstance(instanceId)
+  if (!instance) throw new Error('实例不存在')
+  const gameDir = gamePathFor(instance)
+  const dir = path.join(gameDir, 'resourcepacks')
+  fs.mkdirSync(dir, { recursive: true })
+  const packs: InstalledPack[] = []
+  const skipped: { source: string; reason: string }[] = []
+
+  // 1) VM 汉化组（Modrinth）
+  try {
+    onProgress?.({ phase: '查询 VM 汉化包…', current: 0, total: 1 })
+    const { version, file, exact } = await pickLangPack(instance.mcVersion)
+    const dest = path.join(dir, file.filename)
+    onProgress?.({ phase: `下载 ${file.filename}`, current: 0, total: file.size })
+    await downloadFile([file.url], dest, (cur, total) => onProgress?.({ phase: `下载 ${file.filename}`, current: cur, total }))
+    enableResourcePack(gameDir, path.basename(dest))
+    packs.push({ name: path.basename(dest), source: 'vm', size: fs.statSync(dest).size, version: version.version_number, exact })
+  } catch (e) {
+    skipped.push({ source: 'VM 汉化组', reason: (e as Error).message })
+  }
+
+  // 2) CFPA 整合语言包（GitHub release，国内走镜像）
+  try {
+    const cf = await pickCfpa(instance.mcVersion)
+    if (!cf) {
+      skipped.push({ source: 'CFPA 语言包', reason: `没有 ${instance.mcVersion} 分支（目前只出 1.21 的整合包）` })
+    } else {
+      const dest = path.join(dir, cf.name)
+      onProgress?.({ phase: `下载 ${cf.name}`, current: 0, total: cf.size })
+      await downloadFile(
+        CFPA_MIRRORS.map((m) => m(cf.url)),
+        dest,
+        (cur, total) => onProgress?.({ phase: `下载 ${cf.name}`, current: cur, total })
+      )
+      const got = fs.statSync(dest).size
+      if (cf.size && got !== cf.size) throw new Error(`下载不完整（${got} / ${cf.size} 字节），重试一次`)
+      enableResourcePack(gameDir, path.basename(dest))
+      packs.push({ name: path.basename(dest), source: 'cfpa', size: got, version: cf.tag, exact: true })
+    }
+  } catch (e) {
+    skipped.push({ source: 'CFPA 语言包', reason: (e as Error).message })
+  }
+
+  if (!packs.length) throw new Error(`汉化包都没装上：${skipped.map((s) => `${s.source} ${s.reason}`).join('；')}`)
+  onProgress?.({ phase: `已装好 ${packs.length} 个汉化包并启用`, current: packs.length, total: packs.length })
+  return { packs, skipped }
+}
+
+/** 只装 VM 一个包（老接口，保留兼容） */
 export async function installLangPack(
   instanceId: string,
   onProgress?: (p: { phase: string; current: number; total: number }) => void
@@ -64,21 +167,15 @@ export async function installLangPack(
   const instance = store.getInstance(instanceId)
   if (!instance) throw new Error('实例不存在')
   const gameDir = gamePathFor(instance)
-
   onProgress?.({ phase: '查询汉化包版本…', current: 0, total: 1 })
   const { version, file, exact } = await pickLangPack(instance.mcVersion)
-
   const dir = path.join(gameDir, 'resourcepacks')
   fs.mkdirSync(dir, { recursive: true })
   const dest = path.join(dir, file.filename)
-  onProgress?.({ phase: `下载汉化包 ${file.filename}`, current: 0, total: file.size })
   await downloadFile([file.url], dest, (cur, total) =>
     onProgress?.({ phase: `下载汉化包 ${file.filename}`, current: cur, total })
   )
-
   enableResourcePack(gameDir, path.basename(dest))
-  onProgress?.({ phase: '已装好并启用汉化包', current: 1, total: 1 })
-
   return { file: dest, name: path.basename(dest), size: fs.statSync(dest).size, exact, packVersion: version.version_number }
 }
 
@@ -92,7 +189,7 @@ export interface ModCoverage {
 }
 
 export interface LangCoverage {
-  pack: string | null
+  packs: { name: string; count: number }[]
   coveredCount: number
   mods: ModCoverage[]
 }
@@ -100,16 +197,17 @@ export interface LangCoverage {
 /**
  * 汉化包到底覆盖了哪些模组 —— 用户最常问的就是「我装了，为什么这个模组还是英文」。
  * 资源包只能替换 jar 里用可翻译键定义的文本，模组硬编码的字符串（直接 drawString 的标题等）谁都翻不了；
- * 另外 VM 汉化包是按模组收录的，没收录的模组自然一点中文都没有。
+ * 另外汉化包是按模组收录的，没收录的模组自然一点中文都没有。
+ * 这里把 resourcepacks 下所有 zip 的 assets/<modid>/lang/zh_cn.json 汇总起来算并集。
  */
 export function inspectLangPack(instanceId: string): LangCoverage {
   const instance = store.getInstance(instanceId)
   if (!instance) throw new Error('实例不存在')
   const gameDir = gamePathFor(instance)
 
-  // 1) 找覆盖模组最多的那个资源包（一般就是汉化包）
+  // 1) 汇总所有资源包里的 zh_cn 语言文件
   const rpDir = path.join(gameDir, 'resourcepacks')
-  let pack: string | null = null
+  const packs: { name: string; count: number }[] = []
   const covered = new Set<string>()
   if (fs.existsSync(rpDir)) {
     for (const z of fs.readdirSync(rpDir)) {
@@ -121,16 +219,15 @@ export function inspectLangPack(instanceId: string): LangCoverage {
           const m = /^assets\/([^/]+)\/lang\/zh_cn\.json$/i.exec(e.name)
           if (m) ids.add(m[1].toLowerCase())
         }
-        if (ids.size > covered.size) {
-          pack = z
-          covered.clear()
-          ids.forEach((i) => covered.add(i))
-        }
+        if (!ids.size) continue
+        packs.push({ name: z, count: ids.size })
+        ids.forEach((i) => covered.add(i))
       } catch {
         // 坏包跳过
       }
     }
   }
+  packs.sort((a, b) => b.count - a.count)
 
   // 2) 读 mods 里每个模组的 id
   const modsDir = path.join(gameDir, 'mods')
@@ -171,5 +268,5 @@ export function inspectLangPack(instanceId: string): LangCoverage {
     }
   }
 
-  return { pack, coveredCount: covered.size, mods }
+  return { packs, coveredCount: covered.size, mods }
 }

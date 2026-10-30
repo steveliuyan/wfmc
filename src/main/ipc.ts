@@ -80,7 +80,7 @@ import { applyPerfPreset, deleteScreenshot, listScreenshots, PERF_PRESETS, scree
 import { cancelTask, clearFinishedTasks, listTasks, runTask, setTaskEmitter } from './tasks'
 import { applyUpdate, checkReleases, checkUpdate, pickAsset } from './updater'
 import { diagnoseMods } from './moddoctor'
-import { installLangPack, inspectLangPack } from './langpack'
+import { installLangPacks, inspectLangPack } from './langpack'
 import { cleanTempFiles, speedTest } from './speedtest'
 import { importTracks, listTracks, musicDir, removeTrack } from './music'
 import { installCurseforgeMod, searchCurseforge, testCurseforgeKey } from './curseforge'
@@ -231,7 +231,7 @@ export function registerIpc() {
     const instance = store.getInstance(id)
     if (!instance) throw new Error('实例不存在')
     return await runTask('install', `给 ${instance.name} 装汉化包`, async (ctx) =>
-      installLangPack(id, (p) => {
+      installLangPacks(id, (p) => {
         progress({ ...p, key: `lang-${id}`, taskId: ctx.id })
         ctx.report({ phase: p.phase, current: p.current, total: p.total })
       })

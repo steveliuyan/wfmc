@@ -217,10 +217,13 @@ export const api = {
   installLoader: (id: string, loader: string, loaderVersion: string) =>
     call<Instance>('instance:install-loader', id, loader, loaderVersion),
   installLangPack: (id: string) =>
-    call<{ file: string; name: string; size: number; exact: boolean; packVersion: string }>('langpack:install', id),
+    call<{
+      packs: { name: string; source: 'vm' | 'cfpa'; size: number; version: string; exact: boolean }[]
+      skipped: { source: string; reason: string }[]
+    }>('langpack:install', id),
   inspectLangPack: (id: string) =>
     call<{
-      pack: string | null
+      packs: { name: string; count: number }[]
       coveredCount: number
       mods: { id: string; name: string; covered: boolean; selfChinese: boolean }[]
     }>('langpack:inspect', id),
