@@ -11,6 +11,8 @@ import { listContent } from './content'
 import { ensureGamePath, resourcePathFor } from './paths'
 import { ensureInjector } from './authlib'
 import { diagnoseMods } from './moddoctor'
+import { startInstanceManifest, stopInstanceManifest } from './serversync'
+import { firstLanIp } from './netshare'
 
 type LogFn = (instanceId: string, line: string) => void
 type StateFn = (payload: LaunchStatePayload) => void
@@ -124,6 +126,11 @@ export async function launchInstance(
         if (bad) {
           onLog(instance.id, `[WFMC] 注意：${bad.detail}`)
         }
+        // 缺前置 / 前置被禁用：游戏里只会弹一句「模组不兼容」，这里提前说清楚
+        const dep = issues.find((i) => (i.enableFiles && i.enableFiles.length > 0) || i.fixDep)
+        if (dep) {
+          onLog(instance.id, `[WFMC] 注意：${dep.title}（到「内容管理 → 体检模组」可以一键处理）`)
+        }
       }
     } catch {
       /* 体检失败就算了，别影响启动 */
@@ -176,6 +183,29 @@ export async function launchInstance(
     }
   }, 25_000)
 
+  // 游戏里点了「对局域网开放」→ 顺手把本实例的模组清单也发出去，
+  // 好友在联机页就能看到版本/加载器，点「进入」还能自动补齐 mod。
+  let publishedLanPort = 0
+  const maybePublishLanManifest = (line: string) => {
+    const m = /Local game hosted on port (\d{1,5})/i.exec(line)
+    if (!m) return
+    const lanPort = Number(m[1])
+    if (!lanPort || lanPort === publishedLanPort) return
+    publishedLanPort = lanPort
+    stopInstanceManifest(instance.id)
+    void startInstanceManifest(instance.id, lanPort + 1).then((info) => {
+      if (!info) {
+        onLog(instance.id, '[WFMC] 端口全被占用，没能共享模组清单（好友需要自己对齐 mod）')
+        return
+      }
+      const ip = firstLanIp()
+      onLog(
+        instance.id,
+        `[WFMC] 已共享模组清单：${ip || '<你的内网IP>'}:${info.port}（${info.mods} 个 mod）—— 好友用 WFMC 进服会自动补齐 mod`
+      )
+    })
+  }
+
   const pipe = (stream: NodeJS.ReadableStream | null | undefined, prefix = '') => {
     if (!stream) return
     let buffer = ''
@@ -183,7 +213,11 @@ export async function launchInstance(
       buffer += chunk.toString('utf-8')
       const lines = buffer.split(/\r?\n/)
       buffer = lines.pop() ?? ''
-      for (const line of lines) if (line.trim()) onLog(instance.id, prefix + line)
+      for (const line of lines) {
+        if (!line.trim()) continue
+        onLog(instance.id, prefix + line)
+        maybePublishLanManifest(line)
+      }
     })
   }
   pipe(proc.stdout)
@@ -206,12 +240,14 @@ export async function launchInstance(
   watcher.on('error', (err: Error) => {
     clearTimeout(fallback)
     running.delete(instance.id)
+    stopInstanceManifest(instance.id)
     onLog(instance.id, `[WFMC] 启动失败: ${err?.message ?? err}`)
     onState({ instanceId: instance.id, state: 'error', message: String(err?.message ?? err) })
   })
   watcher.on('minecraft-exit', (e: { code: number; signal: string; crashReport: string; crashReportLocation: string }) => {
     clearTimeout(fallback)
     running.delete(instance.id)
+    stopInstanceManifest(instance.id)
     commitPlayTime()
     if (e.crashReport) {
       onLog(instance.id, '[WFMC] 检测到崩溃报告，内容片段：')

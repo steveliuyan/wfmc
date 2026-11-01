@@ -23,6 +23,7 @@ import {
   backupSaves,
   contentDir,
   deleteContent,
+  enableContent,
   exportInstance,
   importContent,
   importInstanceZip,
@@ -86,8 +87,15 @@ import { PACK_EXT, inspectWorldPack, packWorld, restoreWorldPack } from './world
 import { cleanTempFiles, speedTest } from './speedtest'
 import { importTracks, listTracks, musicDir, removeTrack } from './music'
 import { installCurseforgeMod, searchCurseforge, testCurseforgeKey } from './curseforge'
-import { buildManifest, compareEnvironment, discoverManifest, syncEnvironment } from './serversync'
-import { startManifestServer } from './serversync'
+import {
+  buildManifest,
+  compareEnvironment,
+  discoverManifest,
+  startInstanceManifest,
+  startManifestServer,
+  stopInstanceManifest,
+  syncEnvironment
+} from './serversync'
 import { logError, readErrors } from './errlog'
 import { exportInstanceAsMrpack, inspectMrpack } from './modpackexport'
 import {
@@ -309,6 +317,10 @@ export function registerIpc() {
   // ---------- 内容管理（模组/资源包/光影/存档） ----------
   ipcMain.handle('content:list', (_e, instanceId: string, kind: ContentKind) => listContent(instanceId, kind))
   ipcMain.handle('content:toggle', (_e, instanceId: string, target: string) => toggleContent(instanceId, target))
+  // 体检里「前置被禁用了」的一键修复：把 .disabled 去掉，不重新下载
+  ipcMain.handle('content:enable', (_e, instanceId: string, kind: ContentKind, names: string[]) =>
+    enableContent(instanceId, kind, names)
+  )
   ipcMain.handle('content:delete', (_e, instanceId: string, target: string) => deleteContent(instanceId, target))
   ipcMain.handle('content:import', async (_e, instanceId: string, kind: ContentKind) => {
     const res = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] })
@@ -916,6 +928,22 @@ export function registerIpc() {
   })
 
   // ---------- 进服前环境检查 / 自动补齐 ----------
+  // 只探「这个地址背后的东西是什么环境」，不改本地文件
+  ipcMain.handle('serversync:probe', async (_e, host: string, gamePort: number) => {
+    const found = await discoverManifest(host, gamePort)
+    if (!found) return { found: false }
+    return { found: true, base: found.base, manifest: found.manifest }
+  })
+  // 手动/自动把「当前实例的模组清单」发布出去（游戏里对局域网开放后自动调，也可以手动点）
+  ipcMain.handle('serversync:publish-instance', async (_e, instanceId: string, basePort?: number) => {
+    const info = await startInstanceManifest(instanceId, basePort ?? 0)
+    if (!info) return { ok: false }
+    return { ok: true, port: info.port, mods: info.mods, lanIp: firstLanIp() }
+  })
+  ipcMain.handle('serversync:unpublish-instance', (_e, instanceId: string) => {
+    stopInstanceManifest(instanceId)
+    return true
+  })
   ipcMain.handle('serversync:check', async (_e, instanceId: string, host: string, gamePort: number) => {
     const found = await discoverManifest(host, gamePort)
     if (!found) return { reachable: false, missing: [], extra: [] }
@@ -1006,7 +1034,7 @@ export function registerIpc() {
   })
 
   // ---------- 联机房间码 ----------
-  ipcMain.handle('room:encode', (_e, host: string, port: number) => encodeRoomCode(host, port))
+  ipcMain.handle('room:encode', (_e, host: string, port: number, env?: { mcVersion?: string; loader?: string; loaderVersion?: string }) => encodeRoomCode(host, port, env))
   ipcMain.handle('room:decode', (_e, code: string) => decodeRoomCode(code))
 
   // ---------- 截图 ----------

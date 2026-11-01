@@ -387,6 +387,26 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                       <span className="muted small">自动从 Modrinth 找同名项目，连带它自己的前置一起装</span>
                     </div>
                   )}
+                  {issue.enableFiles && issue.enableFiles.length > 0 && (
+                    <div className="row wrap" style={{ marginTop: 8 }}>
+                      <button
+                        className="btn sm primary"
+                        onClick={async () => {
+                          try {
+                            await api.enableContent(activeId, 'mods', issue.enableFiles!)
+                            toast(`已启用：${issue.enableFiles!.map((f) => f.replace(/\.disabled$/, '')).join('、')}`, 'success')
+                            setModIssues([])
+                            await refresh()
+                          } catch (e) {
+                            toast(`启用失败：${friendlyError(e)}`, 'error')
+                          }
+                        }}
+                      >
+                        启用这个前置
+                      </button>
+                      <span className="muted small">文件已经在本机，只是名字带 .disabled，改回来就行，不用重新下载</span>
+                    </div>
+                  )}
                   {issue.fixLoader && (
                     <div className="row wrap" style={{ marginTop: 8 }}>
                       <button

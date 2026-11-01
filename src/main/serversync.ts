@@ -81,21 +81,14 @@ export function buildManifest(id: string): ServerManifest | undefined {
 
 const running = new Map<string, { server: http.Server; port: number }>()
 
-/**
- * 起清单服务：优先用「游戏端口 + 1」，被占用就往后试几个。
- * 只暴露 manifest.json 与 mods/ 下的文件，其它一律 404。
- */
-export async function startManifestServer(id: string): Promise<{ port: number; mods: number } | undefined> {
-  if (running.has(id)) {
-    const cur = running.get(id)!
-    return { port: cur.port, mods: buildManifest(id)?.mods.length ?? 0 }
-  }
-  const manifest = buildManifest(id)
-  if (!manifest) return undefined
-
-  const handler: http.RequestListener = (req, res) => {
+/** 清单 HTTP 处理器：只暴露 /manifest.json 与 /mods/<文件名>，其它 404（每次请求重算，改了 mod 立刻生效） */
+function manifestHandler(
+  getManifest: () => ServerManifest | undefined,
+  getModsDir: () => string
+): http.RequestListener {
+  return (req, res) => {
     const url = decodeURIComponent((req.url ?? '/').split('?')[0])
-    const fresh = buildManifest(id)
+    const fresh = getManifest()
     if (!fresh) {
       res.writeHead(500).end('no manifest')
       return
@@ -108,7 +101,7 @@ export async function startManifestServer(id: string): Promise<{ port: number; m
     }
     if (url.startsWith('/mods/')) {
       const name = path.basename(url.slice('/mods/'.length))
-      const full = path.join(serverDir(id), 'mods', name)
+      const full = path.join(getModsDir(), name)
       if (!fs.existsSync(full)) {
         res.writeHead(404).end('not found')
         return
@@ -123,8 +116,13 @@ export async function startManifestServer(id: string): Promise<{ port: number; m
     }
     res.writeHead(404).end('not found')
   }
+}
 
-  const candidates = [manifest.gamePort + 1, manifest.gamePort + 2, manifest.gamePort + 3, 0]
+/** 依次在这些端口上试监听，全占用就用系统分配（0） */
+async function listenFirst(
+  candidates: number[],
+  handler: http.RequestListener
+): Promise<{ server: http.Server; port: number } | undefined> {
   for (const port of candidates) {
     const server = http.createServer(handler)
     const ok = await new Promise<number | undefined>((resolve) => {
@@ -134,13 +132,32 @@ export async function startManifestServer(id: string): Promise<{ port: number; m
         resolve(addr.port)
       })
     })
-    if (ok) {
-      running.set(id, { server, port: ok })
-      return { port: ok, mods: manifest.mods.length }
-    }
+    if (ok) return { server, port: ok }
     server.close()
   }
   return undefined
+}
+
+/**
+ * 起清单服务：优先用「游戏端口 + 1」，被占用就往后试几个。
+ * 只暴露 manifest.json 与 mods/ 下的文件，其它一律 404。
+ */
+export async function startManifestServer(id: string): Promise<{ port: number; mods: number } | undefined> {
+  if (running.has(id)) {
+    const cur = running.get(id)!
+    return { port: cur.port, mods: buildManifest(id)?.mods.length ?? 0 }
+  }
+  const manifest = buildManifest(id)
+  if (!manifest) return undefined
+
+  const handler = manifestHandler(
+    () => buildManifest(id),
+    () => path.join(serverDir(id), 'mods')
+  )
+  const started = await listenFirst([manifest.gamePort + 1, manifest.gamePort + 2, manifest.gamePort + 3, 0], handler)
+  if (!started) return undefined
+  running.set(id, started)
+  return { port: started.port, mods: manifest.mods.length }
 }
 
 export function stopManifestServer(id: string): void {
@@ -156,6 +173,83 @@ export function stopManifestServer(id: string): void {
 
 export function manifestPort(id: string): number | undefined {
   return running.get(id)?.port
+}
+
+/* ------------------------------------------------------------------ *
+ * 房主侧（客户端实例）：在游戏里「对局域网开放」之后，
+ * 立刻用「局域网端口 + 1」把这个实例的 mod 清单也发出去，
+ * 好友在联机页就能看到版本/加载器，点「进入」还能自动补齐 mod。
+ * ------------------------------------------------------------------ */
+
+const runningInstances = new Map<string, { server: http.Server; port: number }>()
+
+/** 用客户端实例（不是服务端）生成清单 */
+export function buildInstanceManifest(instanceId: string): ServerManifest | undefined {
+  const instance = store.getInstance(instanceId)
+  if (!instance) return undefined
+  const modsDir = path.join(gamePathFor(instance), 'mods')
+  const mods: ModRef[] = []
+  if (fs.existsSync(modsDir)) {
+    for (const name of fs.readdirSync(modsDir)) {
+      if (!name.toLowerCase().endsWith('.jar')) continue
+      try {
+        const full = path.join(modsDir, name)
+        const { sha1, size } = sha1File(full)
+        mods.push({ file: name, sha1, size })
+      } catch {
+        /* 读不了就跳过 */
+      }
+    }
+  }
+  return {
+    name: instance.name,
+    mcVersion: instance.mcVersion,
+    loader: instance.loader,
+    loaderVersion: instance.loaderVersion,
+    gamePort: 0,
+    mods,
+    at: Date.now()
+  }
+}
+
+/**
+ * 给「对局域网开放」的房间发布清单。
+ * preferredPort 一般是游戏局域网端口 + 1（主机侧探测规则就是 +1/+2/+3）。
+ */
+export async function startInstanceManifest(
+  instanceId: string,
+  preferredPort: number
+): Promise<{ port: number; mods: number } | undefined> {
+  if (runningInstances.has(instanceId)) {
+    const cur = runningInstances.get(instanceId)!
+    return { port: cur.port, mods: buildInstanceManifest(instanceId)?.mods.length ?? 0 }
+  }
+  const manifest = buildInstanceManifest(instanceId)
+  if (!manifest) return undefined
+  const instance = store.getInstance(instanceId)!
+  const handler = manifestHandler(
+    () => buildInstanceManifest(instanceId),
+    () => path.join(gamePathFor(instance), 'mods')
+  )
+  const started = await listenFirst([preferredPort, preferredPort + 1, preferredPort + 2, 0], handler)
+  if (!started) return undefined
+  runningInstances.set(instanceId, started)
+  return { port: started.port, mods: manifest.mods.length }
+}
+
+export function stopInstanceManifest(instanceId: string): void {
+  const cur = runningInstances.get(instanceId)
+  if (!cur) return
+  try {
+    cur.server.close()
+  } catch {
+    /* 忽略 */
+  }
+  runningInstances.delete(instanceId)
+}
+
+export function instanceManifestPort(instanceId: string): number | undefined {
+  return runningInstances.get(instanceId)?.port
 }
 
 /* ------------------------------------------------------------------ *

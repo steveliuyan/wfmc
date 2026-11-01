@@ -2,7 +2,7 @@
 
 > 读者：后续接手这个项目的自己 / 服务器上的 AI 助手。
 > 目标：让接手方在**不改架构**的前提下，能加功能（公告通知、账号备份、云同步等）、能排障、能发版。
-> 版本：WFMC 1.0.27（`release\WFMC-Portable-1.0.27.exe` / `release\WFMC-Setup-1.0.27.exe`）
+> 版本：WFMC 1.0.30（`release\WFMC-Portable-1.0.30.exe` / `release\WFMC-Setup-1.0.30.exe`）
 > 文档更新：随代码一起改，别只改代码不改这里。
 
 ---
@@ -45,6 +45,80 @@ npx electron-builder --win portable --x64
 ```
 
 CI：`.github/workflows/build.yml`（typecheck → smoke → build → 打包 → 上传产物；打 `v*` tag 自动发 Release）。
+
+---
+
+## 1.5 发布到 GitHub（照抄这份，别凭记忆）
+
+仓库：`steveliuyan/wfmc`（public）。本机**没有 git / gh**，发布全部走 Node 脚本 + GitHub REST API，所以只有两步：传 exe、推源码。
+
+### 1.5.1 前置：token 和代理
+
+```powershell
+cd H:\mcqidongqi
+# ① 清代理（不清会卡住/超时；这 9 个变量都要清）
+foreach($n in 'HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy','ALL_PROXY','all_proxy','NODE_USE_ENV_PROXY','NO_PROXY','no_proxy'){ Remove-Item -Path ("env:" + $n) -ErrorAction SilentlyContinue }
+# ② token（classic，仅 repo 权限；登录名 steveliuyan）
+$env:GH_TOKEN="ghp_************（问用户要，仓库里不留）"
+```
+
+token 失效时去 https://github.com/settings/tokens/new?scopes=repo 重新生成，粘贴时**别带前后的引号/空格**。
+
+> ⚠️ **token 绝不写进仓库里的任何文件**（本文件、脚本、README 都不行）。GitHub 开了 push protection，`opensource.mjs` 推含真 token 的文件会直接 422 `Secret detected in content`。要留就留在仓库外的私人记事里。
+
+### 1.5.2 打包（release 目录要同时有这个版本的两个 exe）
+
+```powershell
+$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
+$env:ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
+npm run build
+npx electron-builder --win portable nsis --x64      # → release\WFMC-Portable-X.Y.Z.exe + WFMC-Setup-X.Y.Z.exe
+```
+
+### 1.5.3 发 Release（两附件共 ~185MB，**上传要 10 分钟以上**，放后台跑）
+
+```powershell
+Start-Process -NoNewWindow node -ArgumentList "scripts\publish-github.mjs","--owner","steveliuyan","--repo","wfmc","--tag","vX.Y.Z","--notes","CHANGELOG.md" -RedirectStandardOutput .pub-out.log -RedirectStandardError .pub-err.log
+Get-Content .pub-out.log -Encoding UTF8 -Tail 6      # 看到 "WFMC-Setup-… 上传完成" 两行才算完
+```
+
+脚本会自己：校验 token → 建/复用仓库 → 建 release（更新说明取自 `CHANGELOG.md` 顶部那一段）→ 逐个上传 `release\*.exe`。传完会打印「更新源」该填什么（`steveliuyan/wfmc`，已烘死在 `settings.updateUrl` 里）。
+
+### 1.5.4 删旧版本（**每次发完必做**：仓库只留最新一个 release，用户的更新源才不会串版本）
+
+```powershell
+node scripts\cleanup-releases.mjs --owner steveliuyan --repo wfmc --keep vX.Y.Z          # 先 --dry 看一眼也行
+node scripts\cleanup-releases.mjs --owner steveliuyan --repo wfmc --keep vX.Y.Z --dry
+```
+
+它把「除 `--keep` 之外的所有 release 连 tag 一起删掉」。删之前确认新的那个 release 已经**两个附件都在**，否则会删出空档。
+
+### 1.5.5 推源码（同样不需要 git，走 Git Data API 一次性建 tree+commit+更新 main）
+
+```powershell
+node scripts\opensource.mjs --repo wfmc --message "feat: WFMC X.Y.Z …"
+```
+
+只推源码：`node_modules` / `dist` / `release` / `WFMC-Data` / 日志都不进（规则同 `.gitignore`）。**别把 `release\*.exe` 传进仓库**（92MB×N 会把仓库撑爆）。
+
+### 1.5.6 复核（发完必看）
+
+```powershell
+node -e "const r=await fetch('https://api.github.com/repos/steveliuyan/wfmc/releases',{headers:{Authorization:'Bearer '+process.env.GH_TOKEN,'User-Agent':'x'}});const j=await r.json();for(const x of j)console.log(x.tag_name,(x.assets||[]).map(a=>a.name).join(' + '))"
+```
+
+期望：**只有一个 release**，且两个 exe 都在、大小 ≈92.2MB / 92.4MB。
+
+### 1.5.7 发版清单（每一项都别省）
+
+1. `npm run typecheck` 干净、`npm run build` 通过；
+2. `package.json` 的 `version` 改好，`CHANGELOG.md` **顶部新增**该版本段落（结构：`# WFMC X.Y.Z` → 若干编号小节 → 「## 下载」表格）；
+3. 打两个 exe（§1.5.2）；
+4. 发 release（§1.5.3），**等两个附件都传完**；
+5. 删旧 release（§1.5.4，`--keep` 最新）；
+6. 推源码（§1.5.5）；
+7. 改本文件顶部的「版本」行，需要时补本节/§13 的坑；
+8. 复核（§1.5.6）。
 
 ---
 
@@ -469,6 +543,8 @@ DELETE /api/v1/backups/b1
   - Forge/NeoForge 一定按 `[[dependencies.xxx]]` **段落**解析（同一行匹配会把模组自身也算成依赖）；
   - 版本范围 `satisfiesRange()` 支持 `>=1.0 <2.0` / `~` / `^` / `1.2.x` / Maven `[1.0,2.0)`；看不懂的写法返回 true（宁可不报，不乱吓人）。
 - `ModIssue.fixLoader`（一键换加载器，`Manage.tsx` 里渲染按钮）与 `fixDep`（一键补前置）。
+- **前置被禁用**（文件名带 `.disabled`）单独报一条 `level:error` 并给 `enableFiles` → `Manage.tsx` 的「启用这个前置」按钮（`mods:toggle`）；此时**不要**再叠加「缺前置/需要换加载器」——文件在本地、只是被改名了，让用户重下等于白等几十 MB。
+- `loaderAlreadyInstalled(gameDir, versionId)`（`minecraft.ts`）：加载器版本目录 + `Version.parse` 合并 `inheritsFrom` 后，逐条查 `libraries` 是否落盘。`mods:switchLoader` / `instances:create` 命中就直接改写 `loader/loaderVersion` 走 `launchVersionId`，**不再跑 xmcl 安装**（以前切回一个装过的加载器会重新下几十 MB 库）。
 - `src/main/moddeps.ts`：`resolveProjectId(modid)` 先按 slug 查 Modrinth，失败再三轮 search；`fixMissingDeps` → `installResource`（自带递归装 required 依赖）。
 - 常量 `NOT_A_MOD` 里的伪依赖（minecraft / java / forge / fabricloader…）一律跳过。
 

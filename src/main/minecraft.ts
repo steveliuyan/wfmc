@@ -221,6 +221,44 @@ export async function listLoaderVersions(loader: LoaderType, mcVersion: string):
   return data
 }
 
+/**
+ * 这套「加载器 + 版本」装完之后版本目录叫什么。
+ *
+ * 装之前就能算出来，所以可以先看本地有没有、有就不再下一遍 ——
+ * 用户来回切加载器时以前会把几百 MB 依赖重下一遍。
+ */
+export function loaderTargetVersionId(loader: LoaderType, mcVersion: string, loaderVersion: string): string {
+  if (loader === 'fabric') return `fabric-loader-${loaderVersion}-${mcVersion}`
+  if (loader === 'quilt') return `quilt-loader-${loaderVersion}-${mcVersion}`
+  if (loader === 'neoforge') return `neoforge-${loaderVersion}`
+  if (loader === 'forge') return `${mcVersion}-forge-${loaderVersion}`
+  return mcVersion
+}
+
+/** 版本 json 在 + 依赖库文件齐 → 这个加载器版本已经装好了，不用再下载 */
+export async function loaderAlreadyInstalled(gameDir: string, versionId: string): Promise<boolean> {
+  if (!versionId) return false
+  if (!fs.existsSync(path.join(gameDir, 'versions', versionId, `${versionId}.json`))) return false
+  try {
+    const resolved = await Version.parse(new MinecraftFolder(gameDir), versionId)
+    for (const lib of resolved.libraries ?? []) {
+      const rel = lib.download?.path
+      if (!rel) continue
+      if (!fs.existsSync(path.join(gameDir, 'libraries', rel))) return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+const LOADER_NAME: Record<string, string> = {
+  fabric: 'Fabric',
+  forge: 'Forge',
+  neoforge: 'NeoForge',
+  quilt: 'Quilt'
+}
+
 /** 安装加载器，返回可启动的版本 id */
 export async function installLoader(
   loader: LoaderType,
@@ -230,6 +268,20 @@ export async function installLoader(
   onProgress?: ProgressFn
 ): Promise<string> {
   const key = `install-${instanceKey(gameDir)}`
+
+  // 已经装过的加载器版本直接复用：本地文件都在，没有再下一遍的道理
+  const reusable = loaderTargetVersionId(loader, mcVersion, loaderVersion)
+  if (await loaderAlreadyInstalled(gameDir, reusable)) {
+    onProgress?.({
+      key,
+      phase: `${LOADER_NAME[loader] ?? loader} ${loaderVersion} 之前就装好了，直接用（不重新下载）`,
+      current: 1,
+      total: 1,
+      done: true
+    })
+    return reusable
+  }
+
   const java = await ensureJava(mcVersion)
 
   if (loader === 'fabric') {

@@ -24,6 +24,19 @@ function LoaderPanel({ instance, onDone }: { instance: Instance; onDone: () => P
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [tick, setTick] = useState(0)
+  const [installed, setInstalled] = useState<string[]>([])
+
+  // 本地已经装好的版本：用来告诉用户「这个已经装过了，切过去就行，不用重下」
+  useEffect(() => {
+    let alive = true
+    api
+      .localVersions(instance.id)
+      .then((list) => alive && setInstalled(list))
+      .catch(() => alive && setInstalled([]))
+    return () => {
+      alive = false
+    }
+  }, [instance.id, instance.versionId])
 
   useEffect(() => {
     let alive = true
@@ -58,6 +71,7 @@ function LoaderPanel({ instance, onDone }: { instance: Instance; onDone: () => P
       await api.installLoader(instance.id, loader, ver)
       toast(`装好了：${LOADER_LABEL[loader]} ${ver}，以后启动就走这个版本`, 'success')
       await onDone()
+      setInstalled(await api.localVersions(instance.id).catch(() => installed))
     } catch (e) {
       toast(`安装失败：${friendlyError(e)}`, 'error')
     } finally {
@@ -69,6 +83,18 @@ function LoaderPanel({ instance, onDone }: { instance: Instance; onDone: () => P
     instance.loader === 'vanilla'
       ? '原版（没装加载器）'
       : `${LOADER_LABEL[instance.loader] ?? instance.loader} ${instance.loaderVersion ?? ''}`
+
+  // 这个「加载器 + 版本」如果在本地已经装过，按钮就只是切过去，不会重下
+  const targetId = ver
+    ? loader === 'fabric'
+      ? `fabric-loader-${ver}-${instance.mcVersion}`
+      : loader === 'quilt'
+        ? `quilt-loader-${ver}-${instance.mcVersion}`
+        : loader === 'neoforge'
+          ? `neoforge-${ver}`
+          : `${instance.mcVersion}-forge-${ver}`
+    : ''
+  const alreadyHave = !!targetId && installed.includes(targetId)
 
   return (
     <div className="detail loader-panel">
@@ -127,7 +153,11 @@ function LoaderPanel({ instance, onDone }: { instance: Instance; onDone: () => P
 
       <div className="row wrap" style={{ marginTop: 12 }}>
         <button className="btn primary" disabled={busy || loading || !ver} onClick={install}>
-          {busy ? '安装中…（看右下角任务）' : `给这个实例装 ${LOADER_LABEL[loader]}`}
+          {busy
+            ? '安装中…（看右下角任务）'
+            : alreadyHave
+              ? `切换到这个版本（${LOADER_LABEL[loader]} ${ver} 已装过）`
+              : `给这个实例装 ${LOADER_LABEL[loader]}`}
         </button>
         {instance.loader !== 'vanilla' && (
           <button
@@ -163,7 +193,9 @@ function LoaderPanel({ instance, onDone }: { instance: Instance; onDone: () => P
           </button>
         )}
         <span className="muted small">
-          装完会新建 {instance.mcVersion} 的 {LOADER_LABEL[loader]} 版本并自动切过去，原来的存档 / mods 都不动。
+          {alreadyHave
+            ? '这个版本本地已经有了，点一下只是把启动版本切过去，不会重新下载任何文件。'
+            : `装完会新建 ${instance.mcVersion} 的 ${LOADER_LABEL[loader]} 版本并自动切过去，原来的存档 / mods 都不动。`}
         </span>
       </div>
     </div>

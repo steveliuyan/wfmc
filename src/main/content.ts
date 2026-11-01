@@ -222,6 +222,23 @@ export function toggleContent(instanceId: string, target: string): ContentItem[]
   return listContent(instanceId, kind)
 }
 
+/** 批量启用（把 xxx.jar.disabled 改回 xxx.jar），体检里「前置被禁用了」一键修复用 */
+export function enableContent(instanceId: string, kind: ContentKind, names: string[]): ContentItem[] {
+  const dir = path.join(instanceRoot(instanceId), kind)
+  for (const name of names) {
+    const full = path.join(dir, name)
+    if (full !== dir && !full.startsWith(dir + path.sep)) continue
+    if (!fs.existsSync(full)) continue
+    if (!full.toLowerCase().endsWith('.disabled')) continue
+    try {
+      fs.renameSync(full, full.slice(0, -'.disabled'.length))
+    } catch {
+      /* 单个失败不影响其它 */
+    }
+  }
+  return listContent(instanceId, kind)
+}
+
 /** 删除单个文件/存档目录 */
 export function deleteContent(instanceId: string, target: string) {
   const root = instanceRoot(instanceId)

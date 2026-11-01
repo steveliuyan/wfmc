@@ -16,6 +16,8 @@ export interface ModIssue {
   fixDep?: string
   /** 前置要求的版本范围（展示用，例如 >=1.0.0） */
   depRange?: string
+  /** 这条问题的「一键修复」= 把 mods 里这几个 .disabled 文件改回 .jar（前置装了但被禁用了） */
+  enableFiles?: string[]
 }
 
 interface ModMeta {
@@ -28,6 +30,8 @@ interface ModMeta {
   depends?: string[]
   /** 依赖 id → 版本要求（Fabric 的 >=1.0.0、Forge 的 [1.0,) 都在这里） */
   depRanges?: Record<string, string>
+  /** 文件名带 .disabled：装了但被禁用，游戏不会加载它 */
+  disabled?: boolean
 }
 
 /** 不算「要装的前置」的那些 id：游戏本体、Java、加载器自己 */
@@ -246,6 +250,46 @@ function parseModJar(file: string): ModMeta {
 }
 
 /**
+ * 常见前置的显示名。
+ * 注意：Fabric API 的 modId 就叫 `fabric`（加载器自己叫 fabricloader），
+ * 所以依赖里有 `fabric` 是「缺 Fabric API」，不是「缺 Fabric 加载器」。
+ */
+const DEP_LABEL: Record<string, string> = {
+  fabric: 'Fabric API',
+  'fabric-api': 'Fabric API',
+  'cloth-config': 'Cloth Config API',
+  'architectury': 'Architectury API',
+  'forge-config-api-port': 'Forge Config API Port'
+}
+
+function depLabel(id: string): string {
+  return DEP_LABEL[id.toLowerCase()] ?? id
+}
+
+/** Modrinth 上能直接搜到的 project id（modId 和 project slug 常常不是一回事） */
+function depProjectId(id: string): string {
+  const k = id.toLowerCase()
+  if (k === 'fabric') return 'fabric-api'
+  return id
+}
+
+/**
+ * 同一个东西的两种 id：老模组写 `fabric`（Fabric API 的旧 modId），
+ * 新模组写 `fabric-api`。查依赖时两边都要认。
+ */
+const DEP_ALIAS: Record<string, string> = {
+  fabric: 'fabric-api',
+  'fabric-api': 'fabric'
+}
+
+function lookupProviders(map: Map<string, ModMeta[]>, key: string): ModMeta[] {
+  const direct = map.get(key)
+  if (direct && direct.length > 0) return direct
+  const alias = DEP_ALIAS[key]
+  return alias ? (map.get(alias) ?? []) : []
+}
+
+/**
  * Mod 体检：重复 mod、加载器不匹配、缺前置、失效的 .old 残留。
  * 全部靠读 jar 内元数据，离线可跑。
  */
@@ -256,16 +300,20 @@ export function diagnoseMods(instanceId: string): { mods: ModMeta[]; issues: Mod
   const mods: ModMeta[] = []
   if (fs.existsSync(modsDir)) {
     for (const name of fs.readdirSync(modsDir)) {
-      if (!name.toLowerCase().endsWith('.jar')) continue
-      mods.push(parseModJar(path.join(modsDir, name)))
+      // 被禁用的（xxx.jar.disabled）也要读：它可能正是别人缺的那个前置
+      if (!/\.jar(\.disabled)?$/i.test(name)) continue
+      const meta = parseModJar(path.join(modsDir, name))
+      meta.disabled = name.toLowerCase().endsWith('.disabled')
+      mods.push(meta)
     }
   }
+  const active = mods.filter((m) => !m.disabled)
 
   const issues: ModIssue[] = []
 
   // 1) 重复 mod（同 modId 多个文件）
   const byId = new Map<string, ModMeta[]>()
-  for (const mod of mods) {
+  for (const mod of active) {
     if (!mod.id) continue
     const list = byId.get(mod.id) ?? []
     list.push(mod)
@@ -285,7 +333,7 @@ export function diagnoseMods(instanceId: string): { mods: ModMeta[]; issues: Mod
   // 2) 加载器不匹配
   const expected = instance.loader === 'vanilla' ? undefined : instance.loader
   if (expected) {
-    const mismatch = mods.filter(
+    const mismatch = active.filter(
       (m) => m.loader && m.loader !== 'unknown' && m.loader !== expected && !(expected === 'neoforge' && m.loader === 'forge')
     )
     if (mismatch.length > 0) {
@@ -300,18 +348,34 @@ export function diagnoseMods(instanceId: string): { mods: ModMeta[]; issues: Mod
     }
   }
 
-  // 3) 缺前置 / 前置版本不对
+  // 3) 缺前置 / 前置被禁用 / 前置版本不对
   const byModId = new Map<string, ModMeta[]>()
-  for (const mod of mods) if (mod.id) byModId.set(mod.id.toLowerCase(), [...(byModId.get(mod.id.toLowerCase()) ?? []), mod])
+  for (const mod of mods) {
+    if (!mod.id) continue
+    const k = mod.id.toLowerCase()
+    byModId.set(k, [...(byModId.get(k) ?? []), mod])
+  }
 
   const missing = new Map<string, { files: string[]; range?: string }>()
+  const disabledDeps = new Map<string, { files: string[]; jars: string[]; range?: string }>()
   const tooOld = new Map<string, { files: string[]; range?: string; have: string }>()
-  for (const mod of mods) {
+  for (const mod of active) {
     for (const dep of mod.depends ?? []) {
       const key = dep.toLowerCase()
       const range = mod.depRanges?.[dep] ?? mod.depRanges?.[key] ?? ''
-      const installed = byModId.get(key)
-      if (!installed || installed.length === 0) {
+      const providers = lookupProviders(byModId, key)
+      const usable = providers.filter((p) => !p.disabled)
+      // 装了但被禁用：最常见的就是 fabric-api（modId 叫 fabric）被关掉，
+      // 游戏里直接弹「有些模组不兼容」，而界面上还写着「缺前置」
+      if (providers.length > 0 && usable.length === 0) {
+        const cur = disabledDeps.get(key) ?? { files: [], jars: [], range: range || undefined }
+        cur.files.push(mod.file)
+        for (const p of providers) if (!cur.jars.includes(p.file)) cur.jars.push(p.file)
+        if (!cur.range && range) cur.range = range
+        disabledDeps.set(key, cur)
+        continue
+      }
+      if (usable.length === 0) {
         const cur = missing.get(key) ?? { files: [], range: range || undefined }
         cur.files.push(mod.file)
         if (!cur.range && range) cur.range = range
@@ -319,7 +383,7 @@ export function diagnoseMods(instanceId: string): { mods: ModMeta[]; issues: Mod
         continue
       }
       if (!range) continue
-      const have = installed.find((i) => i.version)?.version
+      const have = usable.find((i) => i.version)?.version
       if (!have) continue
       if (!satisfiesRange(have, range)) {
         const cur = tooOld.get(key) ?? { files: [], range, have }
@@ -329,17 +393,37 @@ export function diagnoseMods(instanceId: string): { mods: ModMeta[]; issues: Mod
     }
   }
   for (const [dep, info] of tooOld) {
+    const label = depLabel(dep)
     issues.push({
       level: 'warn',
-      title: `前置版本对不上：${dep}`,
-      detail: `下面这些 mod 要 ${dep} ${info.range || '其它版本'}，你装的是 ${info.have}。版本不匹配时轻则功能缺失，重则进游戏就崩。去「Mod 更新 / 资源」页把 ${dep} 换成合适的版本。`,
+      title: `前置版本对不上：${label}`,
+      detail: `下面这些 mod 要 ${label} ${info.range || '其它版本'}，你装的是 ${info.have}。版本不匹配时轻则功能缺失，重则进游戏就崩。去「Mod 更新 / 资源」页把 ${label} 换成合适的版本。`,
       files: [...new Set(info.files)]
     })
   }
-  const LOADER_WORDS = new Set(['fabric', 'forge', 'neoforge', 'quilt', 'fabricloader','fabric-loader'])
+  for (const [dep, info] of disabledDeps) {
+    const label = depLabel(dep)
+    issues.push({
+      level: 'error',
+      title: `前置被禁用了：${label}`,
+      detail: `${[...new Set(info.files)].length} 个 mod 要它才生效，但它现在是「已禁用」状态（文件名带 .disabled），游戏不会加载 —— 典型现象就是进游戏弹「有些不兼容的模组」或者那个模组功能缺一半。点下面「启用 ${label}」改回可用就行，文件已经在本机，不用重新下载。`,
+      files: info.jars,
+      enableFiles: info.jars
+    })
+  }
+  // 这里的 id 是「加载器自己」，不是要装的前置模组
+  const LOADER_WORDS = new Set([
+    'fabricloader',
+    'fabric-loader',
+    'fabric_loader',
+    'forge',
+    'neoforge',
+    'quilt_loader',
+    'quilted_fabric_loader',
+    'quilt-loader'
+  ])
   for (const [dep, info] of missing) {
     if (LOADER_WORDS.has(dep)) {
-      // 声明依赖 fabric 意思是「这是个 Fabric mod」，不是真缺一个前置模组
       issues.push({
         level: 'warn',
         title: `这些 mod 需要 ${dep} 加载器`,
@@ -348,20 +432,22 @@ export function diagnoseMods(instanceId: string): { mods: ModMeta[]; issues: Mod
       })
       continue
     }
+    const label = depLabel(dep)
     const rangeText = info.range ? ` ${info.range}` : ''
     issues.push({
       level: 'warn',
-      title: `缺前置：${dep}${rangeText}`,
-      detail: `${[...new Set(info.files)].length} 个 mod 要它才能正常工作，但 mods 目录里没有。缺前置时游戏可能不崩，但那个模组的功能会缺一半（物品没配方、界面点不动之类）。点下面「装上 ${dep}」自动从 Modrinth 找并安装。`,
+      title: `缺前置：${label}${rangeText}`,
+      detail: `${[...new Set(info.files)].length} 个 mod 要它才能正常工作，但 mods 目录里没有（或只有被禁用的版本）。缺前置时游戏可能不崩，但那个模组的功能会缺一半（物品没配方、界面点不动之类），有的加载器还会直接弹「模组不兼容」。点下面「装上 ${label}」自动从 Modrinth 找并安装。`,
       files: [...new Set(info.files)],
-      fixDep: dep,
+      fixDep: depProjectId(dep),
       depRange: info.range
     })
   }
 
   // 4) 残留 .old / .disabled
+  const neededDisabled = new Set([...disabledDeps.values()].flatMap((v) => v.jars))
   const stale = fs.existsSync(modsDir)
-    ? fs.readdirSync(modsDir).filter((n) => n.endsWith('.old') || n.endsWith('.disabled'))
+    ? fs.readdirSync(modsDir).filter((n) => (n.endsWith('.old') || n.endsWith('.disabled')) && !neededDisabled.has(n))
     : []
   if (stale.length > 0) {
     issues.push({
@@ -373,7 +459,11 @@ export function diagnoseMods(instanceId: string): { mods: ModMeta[]; issues: Mod
   }
 
   if (issues.length === 0) {
-    issues.push({ level: 'info', title: '没发现问题', detail: `扫描了 ${mods.length} 个 mod，重复/加载器/前置都正常。` })
+    issues.push({
+      level: 'info',
+      title: '没发现问题',
+      detail: `扫描了 ${active.length} 个启用中的 mod，重复/加载器/前置都正常。`
+    })
   }
 
   return { mods, issues }

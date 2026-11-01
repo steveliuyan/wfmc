@@ -147,6 +147,13 @@ export interface EnvDiff {
   loaderMismatch?: { server: string; client: string }
 }
 
+/** 房间码里附带的环境信息 */
+export interface RoomEnv {
+  mcVersion?: string
+  loader?: string
+  loaderVersion?: string
+}
+
 export interface TaskInfo {
   id: string
   kind: string
@@ -178,6 +185,8 @@ export interface ModIssue {
   /** 缺的前置 modid，可直接一键装 */
   fixDep?: string
   depRange?: string
+  /** 前置装了但被禁用：这几个 .disabled 文件可以直接启用 */
+  enableFiles?: string[]
 }
 
 export interface ModUpdateItem {  file: string
@@ -276,6 +285,8 @@ export const api = {
 
   listContent: (instanceId: string, kind: ContentKind) => call<ContentItem[]>('content:list', instanceId, kind),
   toggleContent: (instanceId: string, target: string) => call<ContentItem[]>('content:toggle', instanceId, target),
+  enableContent: (instanceId: string, kind: ContentKind, names: string[]) =>
+    call<ContentItem[]>('content:enable', instanceId, kind, names),
   deleteContent: (instanceId: string, target: string) => call<void>('content:delete', instanceId, target),
   importContent: (instanceId: string, kind: ContentKind) =>
     call<ContentItem[] | undefined>('content:import', instanceId, kind),
@@ -327,8 +338,8 @@ export const api = {
   clearTexture: (accountId: string, type: 'skin' | 'cape') => call<void>('skin:clear', accountId, type),
   pathOfFile: (file: File) => bridge.pathOfFile(file),
 
-  encodeRoom: (host: string, port: number) => call<string>('room:encode', host, port),
-  decodeRoom: (code: string) => call<{ host: string; port: number }>('room:decode', code),
+  encodeRoom: (host: string, port: number, env?: RoomEnv) => call<string>('room:encode', host, port, env),
+  decodeRoom: (code: string) => call<{ host: string; port: number; env?: RoomEnv }>('room:decode', code),
 
   screenshots: (instanceId: string) =>
     call<{ name: string; path: string; size: number; time: number }[]>('shots:list', instanceId),
@@ -401,6 +412,12 @@ export const api = {
   hostedModsCount: (id: string) => call<number>('hosted:mods-count', id),
   hostedManifest: (id: string) =>
     call<{ port?: number; mods?: number; manifest?: ServerManifest }>('hosted:manifest', id),
+  serverSyncProbe: (host: string, gamePort: number) =>
+    call<{ found: boolean; base?: string; manifest?: ServerManifest }>('serversync:probe', host, gamePort),
+  publishInstanceManifest: (instanceId: string, basePort?: number) =>
+    call<{ ok: boolean; port?: number; mods?: number; lanIp?: string }>('serversync:publish-instance', instanceId, basePort),
+  unpublishInstanceManifest: (instanceId: string) =>
+    call<boolean>('serversync:unpublish-instance', instanceId),
   serverSyncCheck: (instanceId: string, host: string, gamePort: number) =>
     call<EnvDiff>('serversync:check', instanceId, host, gamePort),
   serverSyncApply: (instanceId: string, diff: EnvDiff) =>
