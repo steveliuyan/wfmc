@@ -12,7 +12,7 @@ import { ensureGamePath, resourcePathFor } from './paths'
 import { ensureInjector } from './authlib'
 import { diagnoseMods } from './moddoctor'
 import { startInstanceManifest, stopInstanceManifest } from './serversync'
-import { firstLanIp } from './netshare'
+import { clearMyLanPort, firstLanIp, noteMyLanPort } from './netshare'
 
 type LogFn = (instanceId: string, line: string) => void
 type StateFn = (payload: LaunchStatePayload) => void
@@ -192,6 +192,8 @@ export async function launchInstance(
     const lanPort = Number(m[1])
     if (!lanPort || lanPort === publishedLanPort) return
     publishedLanPort = lanPort
+    // 记下来：联机页据此把「要共享的端口」自动填成玩家自己设的那个（不一定是 25565）
+    noteMyLanPort(instance.id, lanPort)
     stopInstanceManifest(instance.id)
     void startInstanceManifest(instance.id, lanPort + 1).then((info) => {
       if (!info) {
@@ -241,6 +243,7 @@ export async function launchInstance(
     clearTimeout(fallback)
     running.delete(instance.id)
     stopInstanceManifest(instance.id)
+    clearMyLanPort(instance.id)
     onLog(instance.id, `[WFMC] 启动失败: ${err?.message ?? err}`)
     onState({ instanceId: instance.id, state: 'error', message: String(err?.message ?? err) })
   })
@@ -248,6 +251,7 @@ export async function launchInstance(
     clearTimeout(fallback)
     running.delete(instance.id)
     stopInstanceManifest(instance.id)
+    clearMyLanPort(instance.id)
     commitPlayTime()
     if (e.crashReport) {
       onLog(instance.id, '[WFMC] 检测到崩溃报告，内容片段：')

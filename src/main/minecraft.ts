@@ -518,7 +518,13 @@ export async function installInstanceGame(
   }
   const updated: Instance = { ...instance, versionId, installed: true }
   store.saveInstance(updated)
-  return updated
+  // 别急着报「安装完成」：文件可能只下了一半（下载卡住 / 用户取消 / 镜像挂掉）。
+  // store.getInstance 会按磁盘实际情况重算 installed，这里用它当真值。
+  const check = store.getInstance(updated.id)
+  if (!check?.installed) {
+    throw new Error('游戏文件还没下载完整（版本 jar / json 缺失），请重新点一次安装继续下载（已下载的会自动跳过）')
+  }
+  return check
 }
 
 /**

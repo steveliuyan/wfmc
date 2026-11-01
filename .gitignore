@@ -26,3 +26,9 @@ Thumbs.db
 
 # 本地私密（GitHub token 等），绝不入仓库、也不推上 GitHub
 .local/
+
+# 本地调试截图/临时用户目录/发布日志（均为自检用，不入仓库）
+.shot-*.png
+.tmp-ud/
+.tmp-cfpa/
+.pub-*.log

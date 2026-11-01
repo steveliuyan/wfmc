@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { api, type HostedServer, type LanWorld, type RoomEnv, type ServerManifest, type TunnelState, type UpnpResult } from '../api'
+import type { Instance } from '../../shared/types'
 import { useLauncher, useT } from '../store'
 import { joinWithSync } from '../joinWithSync'
 import type { PageId } from '../App'
@@ -19,7 +20,7 @@ const envText = (m?: ServerManifest) =>
   m ? `${m.mcVersion} · ${loaderName(m.loader)}${m.loaderVersion ? ' ' + m.loaderVersion : ''} · ${m.mods.length} 个模组` : ''
 
 export default function Online({ goto }: { goto: (p: PageId) => void }) {
-  const { toast, current, currentId, askConfirm } = useLauncher()
+  const { toast, current, currentId, askConfirm, instances, setCurrentId, refreshInstances, tasks } = useLauncher()
   const t = useT()
   const [port, setPort] = useState(25565)
   const [lanWorlds, setLanWorlds] = useState<LanWorld[]>([])
@@ -34,14 +35,76 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
   const [roomCode, setRoomCode] = useState('')
   const [roomCodeLan, setRoomCodeLan] = useState('')
   const [codeInput, setCodeInput] = useState('')
-  // 每个局域网世界背后的环境（房主开了 WFMC 的模组清单才探得到）
-  const [probes, setProbes] = useState<Record<string, { ok: boolean; manifest?: ServerManifest }>>({})
+  // 本机游戏「对局域网开放」实际用的端口（游戏里自己填的，不一定是 25565）
+  const [myPort, setMyPort] = useState<{ instanceId?: string; port?: number }>({})
+  // 当前实例的模组清单共享在哪个端口（0 = 没共享）
+  const [livePort, setLivePort] = useState(0)
+  // 手动发布的模组数（用来把「共享中」说得具体点）
+  const [publishedMods, setPublishedMods] = useState(0)
+  // 判断不出该用哪个实例时，让用户直接在列表里点一个
+  const [pick, setPick] = useState<{ address: string; port: number; env?: RoomEnv } | null>(null)
+  // 每个局域网世界背后的环境（房主开了 WFMC 的模组清单才探得到）；at=上次探测时间，用来允许重探
+  const [probes, setProbes] = useState<Record<string, { ok: boolean; manifest?: ServerManifest; at: number }>>({})
+
+  const installing = tasks.find((x) => x.kind === 'install' && x.status === 'running')
+  const myWorld = useMemo(() => lanWorlds.find((w) => !!lanIp && w.address === lanIp), [lanWorlds, lanIp])
 
   useEffect(() => {
     api.lanIp().then(setLanIp)
     api.listHosted().then(setHosting)
     api.tunnelState().then(setTunnel)
+    refreshInstances().catch(() => undefined)
   }, [])
+
+  // 端口自动识别①：launch.ts 从游戏日志里解析出的「对局域网开放」端口
+  useEffect(() => {
+    let alive = true
+    const tick = async () => {
+      const mine = await api.myLanPort().catch(() => ({}) as { instanceId?: string; port?: number })
+      if (alive) setMyPort(mine)
+    }
+    void tick()
+    const timer = setInterval(tick, 3000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [])
+
+  // 只在「游戏报出来的端口变了」时才覆盖输入框，用户手动改的不会被每 3 秒顶回去
+  useEffect(() => {
+    const p = myPort.port
+    if (!p) return
+    setPort((cur) => (cur === p ? cur : p))
+    toast(`自动识别到游戏局域网端口 ${p}（已帮你填好）`, 'info')
+  }, [myPort.port])
+
+  // 端口自动识别②：还没拿到日志端口时，从局域网广播里认出「自己的房间」
+  useEffect(() => {
+    if (!myWorld || myPort.port) return
+    if (port === myWorld.port) return
+    setPort(myWorld.port)
+    toast(`自动识别到游戏局域网端口 ${myWorld.port}（从「${myWorld.motd || '我的房间'}」广播里认出来的）`, 'info')
+  }, [myWorld, myPort.port, port])
+
+  // 模组清单共享状态（游戏里开房间后由 launch.ts 自动发布，这里只负责显示）
+  useEffect(() => {
+    if (!currentId) {
+      setLivePort(0)
+      return
+    }
+    let alive = true
+    const tick = async () => {
+      const p = await api.instanceManifestPort(currentId).catch(() => 0)
+      if (alive) setLivePort(p)
+    }
+    void tick()
+    const timer = setInterval(tick, 4000)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [currentId])
 
   // 局域网世界轮询
   useEffect(() => {
@@ -50,24 +113,33 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
     return () => clearInterval(timer)
   }, [lanOn])
 
-  // 探一下每个世界的版本/加载器/模组数（探不到就当「环境未知」，不拦人）
+  // 探一下每个世界的版本/加载器/模组数。探不到的 8 秒后重探 ——
+  // 房主可能先进游戏、后点「共享模组清单」，只探一次就永远看不到。
   useEffect(() => {
     if (!lanOn) return
-    const todo = lanWorlds.filter((w) => probes[`${w.address}:${w.port}`] === undefined).slice(0, 6)
+    const now = Date.now()
+    const todo = lanWorlds
+      .filter((w) => {
+        const prev = probes[`${w.address}:${w.port}`]
+        return !prev || (!prev.ok && now - prev.at > 8000)
+      })
+      .slice(0, 6)
     if (!todo.length) return
     let cancelled = false
     ;(async () => {
-      const patch: Record<string, { ok: boolean; manifest?: ServerManifest }> = {}
-      for (const w of todo) {
-        const key = `${w.address}:${w.port}`
-        try {
-          const r = await api.serverSyncProbe(w.address, w.port)
-          patch[key] = r.found ? { ok: true, manifest: r.manifest } : { ok: false }
-        } catch {
-          patch[key] = { ok: false }
-        }
-      }
-      if (!cancelled) setProbes((p) => ({ ...p, ...patch }))
+      // 并发探，串行探一排世界会等到天荒地老
+      const rows = await Promise.all(
+        todo.map(async (w) => {
+          const key = `${w.address}:${w.port}`
+          try {
+            const r = await api.serverSyncProbe(w.address, w.port)
+            return [key, r.found ? { ok: true, manifest: r.manifest, at: Date.now() } : { ok: false, at: Date.now() }] as const
+          } catch {
+            return [key, { ok: false, at: Date.now() }] as const
+          }
+        })
+      )
+      if (!cancelled) setProbes((p) => ({ ...p, ...Object.fromEntries(rows) }))
     })()
     return () => {
       cancelled = true
@@ -80,61 +152,128 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
     return () => clearInterval(timer)
   }, [tunnel.running])
 
-  /**
-   * 进服前先决定「用哪个实例」：
-   * 知道房主环境 → 找本地同版本同加载器的实例；没有就问一句然后一键建一个；
-   * 不知道环境 → 用左侧选中的实例，只有一个实例就直接用它。
-   */
-  const resolveInstance = async (env?: RoomEnv): Promise<string | null> => {
-    const instances = await api.listInstances()
-    if (!env?.mcVersion) {
-      if (currentId && instances.some((i) => i.id === currentId)) return currentId
-      if (instances.length === 1) {
-        toast(`没选实例，自动用「${instances[0].name}」进服`, 'info')
-        return instances[0].id
-      }
-      if (!instances.length) {
-        toast('本地一个实例都没有：先去「实例」页建一个，或用房主的房间码（能自动匹配/建实例）', 'error')
-        return null
-      }
-      toast('先在左侧选一个实例；如果房主给了房间码，用房间码会自动匹配', 'error')
-      return null
+  /** 手动发布当前实例的模组清单（游戏里开房间时 launch.ts 会自动发，这里是手动补一刀） */
+  const shareManifest = async () => {
+    const target = current ?? instances.find((i) => i.id === currentId)
+    if (!target) {
+      toast('先在左侧选一个实例（共享出去的就是它的 mods 目录）', 'error')
+      return
     }
-    const mc = env.mcVersion
+    const basePort = (myPort.port ?? port) + 1
+    setBusy('manifest')
+    try {
+      const r = await api.publishInstanceManifest(target.id, basePort).catch(() => undefined)
+      if (r?.ok) {
+        setLivePort(r.port ?? basePort)
+        setPublishedMods(r.mods ?? 0)
+        toast(`模组清单已发布：${r.lanIp || lanIp}:${r.port}（${r.mods} 个 mod）`, 'success')
+      } else {
+        toast('发布失败：端口被占用或实例不存在', 'error')
+      }
+    } finally {
+      setBusy('')
+    }
+  }
+
+  /** 本地有没有「同版本 + 同加载器」的实例 */
+  const matchInstance = (list: Instance[], env?: RoomEnv): Instance | undefined => {
+    if (!env?.mcVersion) return undefined
     const loader = env.loader ?? 'vanilla'
-    const hit = instances.find((i) => i.mcVersion === mc && (i.loader ?? 'vanilla') === loader)
-    if (hit) {
-      if (hit.id !== currentId) toast(`自动用实例「${hit.name}」进服（${mc} · ${loaderName(loader)}）`, 'info')
-      return hit.id
+    return list.find((i) => i.mcVersion === env.mcVersion && (i.loader ?? 'vanilla') === loader)
+  }
+
+  /** 游戏本体没装好就先装（续传），装不好就绝不进服 —— 顺序错了就是「先加 mod 再进服然后报错」 */
+  const ensureInstalled = async (id: string): Promise<boolean> => {
+    const fresh = (await api.listInstances()).find((i) => i.id === id)
+    if (!fresh) {
+      toast('实例不见了（可能被删了），请重新选一个', 'error')
+      return false
     }
+    if (fresh.installed) return true
+    const ok = await askConfirm({
+      title: '游戏本体还没装完',
+      message: `实例「${fresh.name}」的游戏文件不完整（上次下载大概中断了）。\n\n现在接着下载吗？已经下好的文件会自动跳过，不用从头来。装完才会真正进服，然后才补模组。`,
+      okText: '继续下载'
+    })
+    if (!ok) return false
+    toast('开始补齐游戏本体，装完会自动继续…', 'info')
+    try {
+      await api.installGame(fresh.id)
+    } catch (e) {
+      toast(`游戏本体没装完：${(e as Error).message}`, 'error')
+      return false
+    }
+    const after = (await api.listInstances()).find((i) => i.id === id)
+    if (!after?.installed) {
+      toast('游戏本体还是不完整：去「实例」页点一次「校验/补全文件」再来', 'error')
+      return false
+    }
+    await refreshInstances().catch(() => undefined)
+    toast('游戏本体已就绪', 'success')
+    return true
+  }
+
+  /** 按房主环境建实例（这里只建，不装游戏，装什么由 ensureInstalled 统一管） */
+  const createInstanceFor = async (env: RoomEnv): Promise<Instance | undefined> => {
+    const mc = env.mcVersion as string
+    const loader = env.loader ?? 'vanilla'
     const ok = await askConfirm({
       title: '建实例并进服',
-      message: `本地没有「${mc} · ${loaderName(loader)}」的实例。\n\n现在建一个并进服吗？首次会下载游戏和加载器（几百 MB，看网速）。`,
+      message: `本地没有「${mc} · ${loaderName(loader)}」的实例。\n\n现在建一个再进服吗？建完会先下载游戏本体（几百 MB，看网速），装完才进服。`,
       okText: '建实例并进服'
     })
-    if (!ok) return null
+    if (!ok) return undefined
     let loaderVersion = env.loaderVersion
     if (loader !== 'vanilla' && !loaderVersion) {
       const list = await api.loaderVersions(loader, mc).catch(() => [] as { value: string; stable?: boolean }[])
       loaderVersion = (list.find((v) => v.stable) ?? list[0])?.value
     }
-    const inst = await api.createInstance({
-      name: `${mc} ${loaderName(loader)}`,
-      mcVersion: mc,
-      loader,
-      loaderVersion
-    })
-    await api.installGame(inst.id)
-    toast(`实例「${inst.name}」建好了`, 'success')
-    return inst.id
+    try {
+      const inst = await api.createInstance({ name: `${mc} ${loaderName(loader)}`, mcVersion: mc, loader, loaderVersion })
+      await refreshInstances().catch(() => undefined)
+      toast(`实例「${inst.name}」建好了`, 'success')
+      return inst
+    } catch (e) {
+      toast(`建实例失败：${(e as Error).message}`, 'error')
+      return undefined
+    }
   }
 
-  const joinWorld = async (address: string, portNumber: number, env?: RoomEnv) => {
+  /**
+   * 进服主流程（顺序不能反）：
+   * 定实例（按环境匹配 → 按环境新建 → 选中的 → 唯一的 → 让用户点一个）
+   * → 确认游戏本体装好了（没装先续传）→ 才 joinWithSync 补模组并进服。
+   * 以前是先 joinWithSync（补 mod）再发现本体没装，就变成用户说的「先加 mod、再进服、然后报错」。
+   */
+  const startJoin = async (address: string, portNumber: number, env?: RoomEnv, hintInstanceId?: string) => {
+    setPick(null)
     try {
-      const instanceId = await resolveInstance(env)
-      if (!instanceId) return
+      const list = await api.listInstances()
+      let target = hintInstanceId ? list.find((i) => i.id === hintInstanceId) : undefined
+      if (!target) target = matchInstance(list, env)
+      if (!target && env?.mcVersion) {
+        target = await createInstanceFor(env)
+        if (!target) return
+      }
+      if (!target) target = list.find((i) => i.id === currentId)
+      if (!target && list.length === 1) {
+        target = list[0]
+        toast(`没选实例，自动用「${target.name}」进服`, 'info')
+      }
+      if (!target) {
+        if (!list.length) {
+          toast('本地还没有实例：用房主的房间码（码里带版本，会自动建实例），或先去「实例」页建一个', 'error')
+          return
+        }
+        setPick({ address, port: portNumber, env })
+        toast('下面列出的实例里点一个就能进（不用先去左边选）', 'info')
+        return
+      }
+      if (env?.mcVersion) toast(`用实例「${target.name}」进服（${env.mcVersion} · ${loaderName(env.loader)}）`, 'info')
+      if (target.id !== currentId) setCurrentId(target.id)
+      if (!(await ensureInstalled(target.id))) return
       const joined = await joinWithSync({
-        instanceId,
+        instanceId: target.id,
         host: address,
         port: portNumber,
         toast,
@@ -200,6 +339,19 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
             />
           </label>
           <span className="muted small">本机内网地址：{lanIp || '获取中…'}</span>
+          {myPort.port ? (
+            <span className="muted small">
+              游戏实际端口：
+              <button className="chip" style={{ marginLeft: 6 }} onClick={() => setPort(myPort.port as number)}>
+                {myPort.port}
+              </button>
+              {port === myPort.port ? '（已在用）' : '（点一下切过去）'}
+            </span>
+          ) : (
+            <span className="muted small">
+              游戏里点过「对局域网开放」之后，这里的端口会自动变成游戏实际用的那个（不用手填）
+            </span>
+          )}
           {hosting.filter((h) => h.port).length > 0 && (
             <span className="muted small">
               已开服务端端口：
@@ -235,16 +387,11 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
           </button>
           <button
             className="btn"
-            disabled={!currentId}
+            disabled={!currentId || busy === 'manifest'}
             title="游戏里点过「对局域网开放」之后，启动器会自动发布；这里可以手动补一次"
-            onClick={async () => {
-              if (!currentId) return
-              const r = await api.publishInstanceManifest(currentId, port + 1).catch(() => undefined)
-              if (r?.ok) toast(`模组清单已发布：${r.lanIp || lanIp}:${r.port}（${r.mods} 个 mod）`, 'success')
-              else toast('发布失败：端口被占用或实例不存在', 'error')
-            }}
+            onClick={shareManifest}
           >
-            共享我的模组清单
+            {busy === 'manifest' ? '发布中…' : '共享我的模组清单'}
           </button>
           {lanOn && (
             <button
@@ -262,6 +409,72 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
             好友/你自己在游戏里「对局域网开放」后，这里会自动出现；右边会显示房主的版本/加载器/模组数（房主也用的 WFMC 才看得到），点「进入」直接连。
           </span>
         </div>
+
+        {/* 共享状态：让用户看得见「点完到底发生了什么」 */}
+        {livePort > 0 && (
+          <div className="card inner" style={{ marginTop: 10 }}>
+            <div className="badge ok">模组清单共享中（端口 {livePort}）</div>
+            <div className="small" style={{ marginTop: 6 }}>
+              {current?.name ?? '当前实例'} 的 mods 清单已经发在
+              <code>
+                {' '}
+                http://{lanIp || '<你的内网IP>'}:{livePort}/manifest.json
+              </code>
+              {publishedMods > 0 ? `（${publishedMods} 个 mod）` : ''}
+            </div>
+            <div className="muted small" style={{ marginTop: 4 }}>
+              这个地址是给<strong>好友</strong>用的：他那边「局域网联机」列表里会出现你的房间，右边显示「版本 · 加载器 · N 个模组」，
+              点「进入」时缺的 mod 会自动从你这台机下载、补齐后进服。<strong>你自己这边不会有什么变化</strong>（不需要下载自己的 mod），
+              所以别在自己的列表里找「下载」；想验证就在好友那台机上打开联机页看一眼。
+            </div>
+          </div>
+        )}
+
+        {/* 判断不出用哪个实例时，直接让用户点一个，别把人堵在「先在左侧选实例」 */}
+        {pick && (
+          <div className="card inner" style={{ marginTop: 10 }}>
+            <div className="small">
+              用哪个实例进「{pick.address}:{pick.port}」？
+            </div>
+            <div className="row wrap" style={{ marginTop: 8 }}>
+              {instances.map((i) => (
+                <button
+                  key={i.id}
+                  className={i.id === currentId ? 'btn sm primary' : 'btn sm'}
+                  onClick={() => {
+                    setCurrentId(i.id)
+                    void startJoin(pick.address, pick.port, pick.env, i.id)
+                  }}
+                >
+                  {i.name}（{i.mcVersion}
+                  {i.loader && i.loader !== 'vanilla' ? ` · ${loaderName(i.loader)}` : ''}）
+                  {i.installed ? '' : ' · 未安装'}
+                </button>
+              ))}
+              <button className="btn sm" onClick={() => setPick(null)}>
+                取消
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 下载进度：卡住了能取消、能续传 */}
+        {installing && (
+          <div className="card inner" style={{ marginTop: 10 }}>
+            <div className="small">
+              正在下载：{installing.phase ?? installing.title}
+              {installing.total ? `（${installing.current ?? 0}/${installing.total}）` : ''}
+            </div>
+            <div className="row wrap" style={{ marginTop: 6 }}>
+              <button className="btn sm" onClick={() => api.cancelTask(installing.id)}>
+                取消下载
+              </button>
+              <span className="muted small">
+                卡在同一个数字很久不动？点取消，再点一次「进入」会接着下（已下好的文件直接跳过，不重下）。
+              </span>
+            </div>
+          </div>
+        )}
         {lanOn && (
           <div className="file-list" style={{ marginTop: 10 }}>
             {lanWorlds.length === 0 && <div className="muted small">还没发现世界，等几秒或让对方重开一下局域网。</div>}
@@ -269,23 +482,31 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
               const key = `${w.address}:${w.port}`
               const probe = probes[key]
               const manifest = probe?.ok ? probe.manifest : undefined
+              const isMine = !!lanIp && w.address === lanIp
               return (
                 <div className="file-row" key={key}>
                   <span className="ellipsis" title={w.motd}>
+                    {isMine && (
+                      <span className="badge ok" style={{ marginRight: 6 }}>
+                        我的房间
+                      </span>
+                    )}
                     {w.motd || '局域网世界'} <span className="muted small">{w.address}:{w.port}</span>
                   </span>
                   <span className={manifest ? 'badge ok' : 'muted small'}>
-                    {manifest ? envText(manifest) : probe ? '环境未知（房主没用 WFMC 开房间）' : '探测中…'}
+                    {manifest ? envText(manifest) : probe ? '环境未知（房主没开 WFMC 共享）' : '探测中…'}
                   </span>
                   <button
                     className="btn sm primary"
                     onClick={() =>
-                      joinWorld(
+                      startJoin(
                         w.address,
                         w.port,
                         manifest
                           ? { mcVersion: manifest.mcVersion, loader: manifest.loader, loaderVersion: manifest.loaderVersion }
-                          : undefined
+                          : undefined,
+                        // 自己的房间：直接用开这个房间的那个实例，别去猜
+                        isMine && myPort.port === w.port ? myPort.instanceId : undefined
                       )
                     }
                   >
@@ -506,7 +727,7 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
                         'info'
                       )
                     }
-                    await joinWorld(target.host, target.port, target.env)
+                    await startJoin(target.host, target.port, target.env)
                   } catch (e) {
                     toast(`房间码无效：${(e as Error).message}`, 'error')
                   }

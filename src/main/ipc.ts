@@ -91,6 +91,7 @@ import {
   buildManifest,
   compareEnvironment,
   discoverManifest,
+  instanceManifestPort,
   startInstanceManifest,
   startManifestServer,
   stopInstanceManifest,
@@ -103,6 +104,7 @@ import {
   lanList,
   lanStart,
   lanStop,
+  myLanPort,
   publicEndpoint,
   tunnelStart,
   tunnelState,
@@ -944,6 +946,8 @@ export function registerIpc() {
     stopInstanceManifest(instanceId)
     return true
   })
+  // 这个实例现在有没有在共享清单（联机页轮询用，0 = 没共享）
+  ipcMain.handle('serversync:instance-port', (_e, instanceId: string) => instanceManifestPort(instanceId) ?? 0)
   ipcMain.handle('serversync:check', async (_e, instanceId: string, host: string, gamePort: number) => {
     const found = await discoverManifest(host, gamePort)
     if (!found) return { reachable: false, missing: [], extra: [] }
@@ -1020,6 +1024,8 @@ export function registerIpc() {
     return true
   })
   ipcMain.handle('net:lan-ip', () => firstLanIp())
+  // 本机游戏「对局域网开放」实际用的端口（launch.ts 从游戏日志里解析）
+  ipcMain.handle('lan:my-port', () => myLanPort())
   ipcMain.handle('net:public', async () => (await publicEndpoint()) ?? null)
   ipcMain.handle('net:upnp', async (_e, port: number) => await upnpMap(port))
   ipcMain.handle('net:unupnp', async (_e, port: number) => {

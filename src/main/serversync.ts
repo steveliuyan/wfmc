@@ -268,16 +268,21 @@ export async function discoverManifest(
   host: string,
   gamePort: number
 ): Promise<{ manifest: ServerManifest; base: string } | undefined> {
-  for (const p of [gamePort + 1, gamePort + 2, gamePort + 3]) {
-    try {
+  // 三个端口并发试：串行最坏要 3×6 秒，联机页探一排世界会等到天荒地老
+  const ports = [gamePort + 1, gamePort + 2, gamePort + 3].filter((p) => p > 0 && p <= 65535)
+  const results = await Promise.all(
+    ports.map(async (p) => {
       const base = `http://${host}:${p}`
-      const manifest = await fetchManifest(base)
-      if (manifest && Array.isArray(manifest.mods)) return { manifest, base }
-    } catch {
-      /* 试下一个 */
-    }
-  }
-  return undefined
+      try {
+        const manifest = await fetchManifest(base)
+        if (manifest && Array.isArray(manifest.mods)) return { manifest, base }
+      } catch {
+        /* 这个端口没服务 */
+      }
+      return undefined
+    })
+  )
+  return results.find((r) => r !== undefined)
 }
 
 export interface EnvDiff {

@@ -76,6 +76,31 @@ export function lanList(): LanWorld[] {
 }
 
 /* ------------------------------------------------------------------ *
+ * 「我这台机器上的游戏开在哪个端口」：
+ * 游戏里点「对局域网开放」时端口是玩家自己填的（不一定 25565），
+ * launch.ts 从日志里解析出来后记在这里，联机页就能把端口自动填对。
+ * ------------------------------------------------------------------ */
+
+const myLanPorts = new Map<string, { port: number; at: number }>()
+
+export function noteMyLanPort(instanceId: string, port: number): void {
+  myLanPorts.set(instanceId, { port, at: Date.now() })
+}
+
+export function clearMyLanPort(instanceId: string): void {
+  myLanPorts.delete(instanceId)
+}
+
+/** 本机最近一次「对局域网开放」的端口（谁最新算谁） */
+export function myLanPort(): { instanceId?: string; port?: number; at?: number } {
+  let best: { instanceId: string; port: number; at: number } | undefined
+  for (const [instanceId, info] of myLanPorts) {
+    if (!best || info.at > best.at) best = { instanceId, ...info }
+  }
+  return best ? { ...best } : {}
+}
+
+/* ------------------------------------------------------------------ *
  * 2) STUN：查自己的公网 IP / 端口（P2P 直连要用）
  * ------------------------------------------------------------------ */
 

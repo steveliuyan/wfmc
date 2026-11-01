@@ -73,6 +73,55 @@ export interface DownloadOptions {
 
 type Progress = (current: number, total: number) => void
 
+/**
+ * 卡住判定：这么多毫秒没有新数据就放弃这条连接。
+ * 很多镜像/运营商会把连接挂着不关（既不报错也不发数据），
+ * 没有这个超时，进度条就会永远停在 99%。
+ */
+const IDLE_TIMEOUT_MS = 45_000
+
+class StallError extends Error {
+  constructor(what = '下载') {
+    super(`${what}卡住：${Math.round(IDLE_TIMEOUT_MS / 1000)} 秒没有收到新数据`)
+    this.name = 'StallError'
+  }
+}
+
+interface StallGuard {
+  signal: AbortSignal
+  /** 收到数据时调一次，重新计时 */
+  kick: () => void
+  /** 是否是因为卡住被中断的 */
+  stalled: () => boolean
+  dispose: () => void
+}
+
+function stallGuard(parent?: AbortSignal): StallGuard {
+  const ac = new AbortController()
+  let timer: NodeJS.Timeout | undefined
+  let hit = false
+  const arm = () => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      hit = true
+      ac.abort()
+    }, IDLE_TIMEOUT_MS)
+    timer.unref?.()
+  }
+  const onAbort = () => ac.abort()
+  parent?.addEventListener('abort', onAbort, { once: true })
+  arm()
+  return {
+    signal: ac.signal,
+    kick: arm,
+    stalled: () => hit,
+    dispose: () => {
+      if (timer) clearTimeout(timer)
+      parent?.removeEventListener('abort', onAbort)
+    }
+  }
+}
+
 /** 单流下载（保守路径，任何服务器都能用） */
 async function singleStream(
   u: string,
@@ -81,30 +130,45 @@ async function singleStream(
   signal: AbortSignal | undefined,
   headers: Record<string, string> = {}
 ): Promise<void> {
-  const res = await fetch(u, { headers: { ...ua, ...headers }, signal })
-  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
-  const total = Number(res.headers.get('content-length') ?? 0)
+  const guard = stallGuard(signal)
   const tmp = `${dest}.part`
-  const out = fs.createWriteStream(tmp)
-  let current = 0
-  const reader = res.body.getReader()
-  for (;;) {
-    checkAbort(signal)
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value) {
-      current += value.byteLength
-      out.write(Buffer.from(value))
-      if (total) onProgress?.(current, total)
+  let out: fs.WriteStream | undefined
+  try {
+    const res = await fetch(u, { headers: { ...ua, ...headers }, signal: guard.signal })
+    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+    const total = Number(res.headers.get('content-length') ?? 0)
+    out = fs.createWriteStream(tmp)
+    let current = 0
+    const reader = res.body.getReader()
+    for (;;) {
+      checkAbort(signal)
+      const read = await reader.read().catch((e) => {
+        if (guard.stalled()) throw new StallError()
+        throw e
+      })
+      if (read.done) break
+      if (read.value) {
+        guard.kick()
+        current += read.value.byteLength
+        out.write(Buffer.from(read.value))
+        if (total) onProgress?.(current, total)
+      }
     }
+    const stream = out
+    await new Promise<void>((resolve, reject) => {
+      stream.on('error', reject)
+      stream.on('finish', () => resolve())
+      stream.end()
+    })
+    await fs.promises.rename(tmp, dest)
+    if (!total) onProgress?.(current, current)
+  } catch (e) {
+    out?.destroy()
+    fs.rmSync(tmp, { force: true })
+    throw e
+  } finally {
+    guard.dispose()
   }
-  await new Promise<void>((resolve, reject) => {
-    out.on('error', reject)
-    out.on('finish', () => resolve())
-    out.end()
-  })
-  await fs.promises.rename(tmp, dest)
-  if (!total) onProgress?.(current, current)
 }
 
 /** 分片（HTTP Range）并发下载：大文件明显更快，失败会自动退回单流 */
@@ -119,6 +183,7 @@ async function chunkedDownload(
   const tmp = `${dest}.part`
   const handle = await fs.promises.open(tmp, 'w')
   const size = Math.ceil(total / chunkCount)
+  const guard = stallGuard(signal)
   let downloaded = 0
   const progress = (n: number) => {
     downloaded += n
@@ -135,25 +200,32 @@ async function chunkedDownload(
         (async () => {
           const res = await fetch(u, {
             headers: { ...ua, Range: `bytes=${start}-${end}` },
-            signal
+            signal: guard.signal
           })
           if (res.status !== 206 || !res.body) throw new Error(`服务器不支持分片（HTTP ${res.status}）`)
           const reader = res.body.getReader()
           let pos = start
           for (;;) {
             checkAbort(signal)
-            const { done, value } = await reader.read()
-            if (done) break
-            if (value) {
-              await handle.write(Buffer.from(value), 0, value.byteLength, pos)
-              pos += value.byteLength
-              progress(value.byteLength)
+            const read = await reader.read().catch((e) => {
+              if (guard.stalled()) throw new StallError()
+              throw e
+            })
+            if (read.done) break
+            if (read.value) {
+              guard.kick()
+              await handle.write(Buffer.from(read.value), 0, read.value.byteLength, pos)
+              pos += read.value.byteLength
+              progress(read.value.byteLength)
             }
           }
         })()
       )
     }
-    await Promise.all(jobs)
+    // 用 allSettled：某一分片崩了要把所有分片都收干净再抛，否则其它分片还在写已删掉的文件
+    const results = await Promise.allSettled(jobs)
+    const failed = results.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined
+    if (failed) throw failed.reason
     await handle.close()
     await fs.promises.rename(tmp, dest)
   } catch (e) {
@@ -164,6 +236,8 @@ async function chunkedDownload(
     }
     fs.rmSync(tmp, { force: true })
     throw e
+  } finally {
+    guard.dispose()
   }
 }
 

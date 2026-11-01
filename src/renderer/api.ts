@@ -418,6 +418,8 @@ export const api = {
     call<{ ok: boolean; port?: number; mods?: number; lanIp?: string }>('serversync:publish-instance', instanceId, basePort),
   unpublishInstanceManifest: (instanceId: string) =>
     call<boolean>('serversync:unpublish-instance', instanceId),
+  /** 这个实例现在共享在哪个端口（0 = 没共享） */
+  instanceManifestPort: (instanceId: string) => call<number>('serversync:instance-port', instanceId),
   serverSyncCheck: (instanceId: string, host: string, gamePort: number) =>
     call<EnvDiff>('serversync:check', instanceId, host, gamePort),
   serverSyncApply: (instanceId: string, diff: EnvDiff) =>
@@ -436,6 +438,8 @@ export const api = {
   lanList: () => call<LanWorld[]>('lan:list'),
   lanStop: () => call<boolean>('lan:stop'),
   lanIp: () => call<string>('net:lan-ip'),
+  /** 本机游戏「对局域网开放」实际用的端口（游戏里自己填的那个，可能不是 25565） */
+  myLanPort: () => call<{ instanceId?: string; port?: number; at?: number }>('lan:my-port'),
   publicEndpoint: () => call<{ ip: string; port: number } | null>('net:public'),
   upnpMap: (port: number) => call<UpnpResult>('net:upnp', port),
   upnpUnmap: (port: number) => call<boolean>('net:unupnp', port),
