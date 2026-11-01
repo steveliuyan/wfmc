@@ -55,8 +55,8 @@ async function call(method, p, body) {
 
 /* ---------------- 收集要上传的文件 ---------------- */
 
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'release', '.git', 'WFMC-Data', '.vscode', '.tmp-shot', '.github'])
-const SKIP_FILES = [/^\.tmp-/, /^\.publish.*\.log$/, /^npm-debug\.log/, /\.log$/i, /^\.tree/, /^\.open\.log$/]
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'release', '.git', 'WFMC-Data', '.vscode', '.tmp-shot', '.github', '.local'])
+const SKIP_FILES = [/^\.tmp-/, /^\.publish.*\.log$/, /^npm-debug\.log/, /\.log$/i, /^\.tree/, /^\.open\.log$/, /^HANDOFF\.md$/]   // HANDOFF.md 只在本地/交接用，不公开
 const TEXT_EXT = /\.(ts|tsx|js|mjs|cjs|json|css|html|md|txt|yml|yaml|bat|ps1|gitignore|npmrc)$/i
 
 const root = process.cwd()
@@ -86,7 +86,7 @@ function walk(dir, rel) {
 
 walk(root, '')
 // 确保这些关键文件在
-for (const must of ['LICENSE', '.gitignore', 'README.md', 'DISCLAIMER.md', 'HANDOFF.md', 'CHANGELOG.md']) {
+for (const must of ['LICENSE', '.gitignore', 'README.md', 'DISCLAIMER.md', 'CHANGELOG.md']) {
   if (!entries.some((e) => e.path === must) && fs.existsSync(path.join(root, must))) {
     entries.push({ path: must, mode: '100644', type: 'blob', content: fs.readFileSync(path.join(root, must), 'utf-8') })
   }
