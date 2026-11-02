@@ -58,6 +58,11 @@ async function call(method, p, body) {
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'release', '.git', 'WFMC-Data', '.vscode', '.tmp-shot', '.github', '.local'])
 const SKIP_FILES = [/^\.tmp-/, /^\.publish.*\.log$/, /^npm-debug\.log/, /\.log$/i, /^\.tree/, /^\.open\.log$/, /^HANDOFF\.md$/]   // HANDOFF.md 只在本地/交接用，不公开
 const TEXT_EXT = /\.(ts|tsx|js|mjs|cjs|json|css|html|md|txt|yml|yaml|bat|ps1|gitignore|npmrc)$/i
+// 二进制资源（图标、内置音频）也要推：源码 clone 下来必须能直接 build —— 缺了 src/renderer/assets/music/*.ogg，
+// `vite build` 会直接报解析不到文件。
+const BIN_EXT = /\.(ogg|mp3|wav|flac|png|jpe?g|gif|webp|ico|icns|ttf|otf|woff2?)$/i
+const TEXT_MAX = 1.8 * 1024 * 1024
+const BIN_MAX = 8 * 1024 * 1024
 
 const root = process.cwd()
 const entries = []
@@ -73,14 +78,16 @@ function walk(dir, rel) {
     if (SKIP_FILES.some((re) => re.test(item.name))) continue
     const name = item.name === '.gitignore' || item.name === '.npmrc' ? item.name : item.name
     const isText = TEXT_EXT.test(item.name) || name === '.gitignore' || name === '.npmrc'
-    if (!isText) continue
+    const isBin = BIN_EXT.test(item.name)
+    if (!isText && !isBin) continue
     const full = path.join(dir, item.name)
     const buf = fs.readFileSync(full)
-    if (buf.length > 1.8 * 1024 * 1024) {
-      console.log(`跳过（>1.8MB）：${relPath}`)
+    const limit = isText ? TEXT_MAX : BIN_MAX
+    if (buf.length > limit) {
+      console.log(`跳过（>${(limit / 1048576).toFixed(1)}MB）：${relPath}`)
       continue
     }
-    entries.push({ path: relPath, mode: '100644', type: 'blob', content: buf.toString('utf-8') })
+    entries.push({ path: relPath, mode: '100644', type: 'blob', buf })
   }
 }
 
@@ -88,11 +95,11 @@ walk(root, '')
 // 确保这些关键文件在
 for (const must of ['LICENSE', '.gitignore', 'README.md', 'DISCLAIMER.md', 'CHANGELOG.md']) {
   if (!entries.some((e) => e.path === must) && fs.existsSync(path.join(root, must))) {
-    entries.push({ path: must, mode: '100644', type: 'blob', content: fs.readFileSync(path.join(root, must), 'utf-8') })
+    entries.push({ path: must, mode: '100644', type: 'blob', buf: fs.readFileSync(path.join(root, must)) })
   }
 }
 
-console.log(`[open] 待推送文件：${entries.length} 个，共 ${(entries.reduce((s, e) => s + e.content.length, 0) / 1024).toFixed(0)} KB`)
+console.log(`[open] 待推送文件：${entries.length} 个，共 ${(entries.reduce((s, e) => s + e.buf.length, 0) / 1024).toFixed(0)} KB`)
 
 /* ---------------- 推送 ---------------- */
 
@@ -113,7 +120,7 @@ const main = async () => {
       for (let attempt = 1; attempt <= 3 && !sha; attempt++) {
         try {
           const b = await call('POST', `/repos/${owner}/${repo}/git/blobs`, {
-            content: Buffer.from(e.content, 'utf-8').toString('base64'),
+            content: e.buf.toString('base64'),
             encoding: 'base64'
           })
           sha = b.sha
