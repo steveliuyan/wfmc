@@ -57,7 +57,7 @@ async function call(method, p, body) {
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'release', '.git', 'WFMC-Data', '.vscode', '.tmp-shot', '.github', '.local'])
 const SKIP_FILES = [/^\.tmp-/, /^\.publish.*\.log$/, /^npm-debug\.log/, /\.log$/i, /^\.tree/, /^\.open\.log$/, /^HANDOFF\.md$/]   // HANDOFF.md 只在本地/交接用，不公开
-const TEXT_EXT = /\.(ts|tsx|js|mjs|cjs|json|css|html|md|txt|yml|yaml|bat|ps1|gitignore|npmrc)$/i
+const TEXT_EXT = /\.(ts|tsx|js|mjs|cjs|py|json|css|html|md|txt|yml|yaml|bat|ps1|gitignore|npmrc)$/i
 // 二进制资源（图标、内置音频）也要推：源码 clone 下来必须能直接 build —— 缺了 src/renderer/assets/music/*.ogg，
 // `vite build` 会直接报解析不到文件。
 const BIN_EXT = /\.(ogg|mp3|wav|flac|png|jpe?g|gif|webp|ico|icns|ttf|otf|woff2?)$/i
