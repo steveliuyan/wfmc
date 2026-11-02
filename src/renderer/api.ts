@@ -246,7 +246,15 @@ export const api = {
   /** 一键清空记录（accounts = 账号列表，playtime = 各实例游玩时长） */
   clearData: (target: 'accounts' | 'playtime') =>
     call<{ target: string; cleared: number; detail: string }>('data:clear', target),
-  /** 数据目录占多大（超时会有 partial） */
+  /** 一键删除数据：整个数据目录清空（连账号一起，账号会留 .bak） */
+  wipeData: () =>
+    call<{ dir: string; removed: number; failed: number; accountBackup: boolean }>('data:wipe'),
+  /** 换目录后把旧目录的数据复制到新目录（只复制不删旧目录，带进度） */
+  migrateData: (fromDir: string) =>
+    call<{ from: string; to: string; copied: number; skipped: number; bytes: number; accounts: number }>(
+      'data:migrate',
+      fromDir
+    ),  /** 数据目录占多大（超时会有 partial） */
   dataSize: () =>
     call<{ dir: string; bytes: number; files: number; partial: boolean }>('data:size'),
   /** 数据目录体检：是否落在安装目录里（更新会清空安装目录 → 要红字提示） */

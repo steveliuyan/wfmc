@@ -396,6 +396,124 @@ class Store {
   }
 
   /**
+   * 一键删除数据：把当前数据目录里的东西整个清掉（实例、版本、mods、存档、账号、日志），
+   * 目录本身留着，启动器还能接着用。删之前先把 accounts.json 备份成 .bak，万一后悔还能捞。
+   */
+  async wipeData(): Promise<{ dir: string; removed: number; failed: number; accountBackup: boolean }> {
+    const dir = path.resolve(this.dataDir)
+    if (!fs.existsSync(dir)) throw new Error(`数据目录不存在：${dir}`)
+    const install = this.installDir()
+    if (install && dir === path.resolve(install)) throw new Error('数据目录就是安装目录，这里不敢整个删掉')
+    if (path.parse(dir).root === dir) throw new Error('数据目录是盘符根目录，这里不敢整个删掉')
+
+    let accountBackup = false
+    try {
+      if (fs.existsSync(this.accountsFile)) {
+        this.backup(this.accountsFile)
+        accountBackup = true
+      }
+    } catch {
+      /* 备份失败也继续删，用户已经确认过了 */
+    }
+
+    let removed = 0
+    let failed = 0
+    for (const name of await fs.promises.readdir(dir)) {
+      try {
+        await fs.promises.rm(path.join(dir, name), { recursive: true, force: true, maxRetries: 2 })
+        removed++
+      } catch {
+        failed++
+      }
+    }
+
+    this._accounts = []
+    this.setSettings({ activeAccountId: undefined })
+    this.reloadAccounts()
+    return { dir, removed, failed, accountBackup }
+  }
+
+  /**
+   * 换目录时把旧目录的数据复制到新目录（只复制，不删旧的 —— 用户确认过了再自己清理）。
+   * 目标里已经存在的同名文件跳过，不覆盖。
+   */
+  async migrateData(
+    fromDir: string,
+    onProgress?: (p: { phase: string; current: number; total: number }) => void
+  ): Promise<{ from: string; to: string; copied: number; skipped: number; bytes: number; accounts: number }> {
+    const from = path.resolve(fromDir)
+    const to = path.resolve(this.dataDir)
+    if (from === to) throw new Error('新旧目录是同一个，不用迁移')
+    if (!fs.existsSync(from)) throw new Error(`旧目录不存在：${from}`)
+    if (to.startsWith(from + path.sep)) throw new Error('新目录在旧目录里面，这样会自己复制自己')
+    if (from.startsWith(to + path.sep)) throw new Error('旧目录在新目录里面，这样会自己复制自己')
+
+    const files: string[] = []
+    const walk = async (d: string) => {
+      let ents: fs.Dirent[]
+      try {
+        ents = await fs.promises.readdir(d, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const e of ents) {
+        const p = path.join(d, e.name)
+        if (e.isDirectory()) await walk(p)
+        else if (e.isFile()) files.push(p)
+      }
+    }
+    onProgress?.({ phase: '统计待迁移文件', current: 0, total: 0 })
+    await walk(from)
+
+    const total = files.length
+    let copied = 0
+    let skipped = 0
+    let bytes = 0
+    for (let i = 0; i < files.length; i++) {
+      const src = files[i]
+      const dest = path.join(to, path.relative(from, src))
+      try {
+        if (fs.existsSync(dest)) {
+          skipped++
+        } else {
+          await fs.promises.mkdir(path.dirname(dest), { recursive: true })
+          await fs.promises.copyFile(src, dest)
+          const st = await fs.promises.stat(dest)
+          bytes += st.size
+          copied++
+        }
+      } catch {
+        skipped++
+      }
+      if (i % 20 === 0 || i === files.length - 1) {
+        onProgress?.({ phase: '复制数据', current: i + 1, total })
+      }
+    }
+
+    // 账号按 id 并进去（目标里已有的不动），别整份覆盖
+    this.reloadAccounts()
+    const oldAccounts = readAccountList(from)
+    let added = 0
+    if (oldAccounts.length) {
+      const cur = this._accounts.slice()
+      const seen = new Set(cur.map((a) => a.id || a.uuid))
+      for (const a of oldAccounts) {
+        const key = a.id || a.uuid
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        cur.push(a)
+        added++
+      }
+      if (added) {
+        this.backup(this.accountsFile)
+        writeJson(this.accountsFile, { accounts: cur })
+        this._accounts = cur
+      }
+    }
+
+    return { from, to, copied, skipped, bytes, accounts: added }
+  }
+  /**
    * 数据目录占多大。设置页/数据面板要显示，但 data 里可能有几十 GB，
    * 所以：异步走、最多 2.5 秒（超时就标记 partial）、结果缓存 5 分钟。
    */

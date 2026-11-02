@@ -221,6 +221,17 @@ export function registerIpc() {
   ipcMain.handle('data:adopt-info', () => store.adoptInfo())
   // 一键清空记录（账号 / 游玩时长）：只清记录，不动游戏文件
   ipcMain.handle('data:clear', (_e, target: 'accounts' | 'playtime') => store.clearData(target))
+  /** 一键删除数据：整个数据目录清空（连账号一起），删前备份 accounts.json */
+  ipcMain.handle('data:wipe', async () => await store.wipeData())
+  /** 换目录后把旧目录的数据复制过来（带进度，可取消） */
+  ipcMain.handle('data:migrate', async (_e, fromDir: string) =>
+    await runTask('misc', '迁移数据目录', async (ctx) =>
+      store.migrateData(fromDir, (p) => {
+        progress({ key: 'data-migrate', ...p, taskId: ctx.id })
+        ctx.report({ phase: p.phase, current: p.current, total: p.total })
+      })
+    )
+  )
   // 数据目录占多大（设置/数据面板显示用）
   ipcMain.handle('data:size', () => store.dataSize())
   // 数据目录体检：是不是放在了安装目录里（更新会把安装目录清空 → 必须提示）

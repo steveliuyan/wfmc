@@ -215,6 +215,16 @@ export default function UpdateCenter() {
           <button className="btn sm" disabled={busy !== ''} onClick={() => check(false)}>
             {busy === 'check' ? t('检查中…', 'Checking…') : t('立即检查', 'Check now')}
           </button>
+          <button
+            className={`btn sm ghost ${openHistory ? 'on' : ''}`}
+            disabled={busy === 'check'}
+            onClick={() => {
+              if (!data) check(true)
+              setOpenHistory((v) => !v)
+            }}
+          >
+            {openHistory ? t('收起历史更新', 'Hide history') : t('历史更新', 'Update history')}
+          </button>
         </div>
       </div>
 
@@ -241,7 +251,7 @@ export default function UpdateCenter() {
               {busy === 'install' ? t('准备下载…', 'Preparing…') : t('下载并安装', 'Download & install')}
             </button>
             <button className="btn sm ghost" onClick={() => setOpenHistory((v) => !v)}>
-              {openHistory ? t('收起历史版本', 'Hide versions') : t('查看历史版本', 'Version history')}
+              {openHistory ? t('收起历史更新', 'Hide history') : t('历史更新', 'Update history')}
             </button>
           </div>
         </div>
@@ -255,16 +265,27 @@ export default function UpdateCenter() {
         </div>
       )}
 
-      {latest && (data?.hasUpdate || openHistory) && (
+      {latest && data?.hasUpdate && (
         <div className="upd-notes-wrap">
-          <div className="mini-label">{t('更新内容', "What's new")} · v{latest.version}</div>
+          <div className="mini-label">{t('新版本更新内容', "What's new in")} v{latest.version}</div>
           <Notes text={latest.notes} />
         </div>
       )}
 
-      {openHistory && history.length > 0 && (
+      {openHistory && (
         <div className="upd-history">
-          <div className="mini-label">{t('历史版本', 'All versions')}</div>
+          <div className="mini-label">
+            {t('历史更新（从新到旧）', 'Update history')}
+            {history.length > 0 ? ` · ${history.length} ` + t('个版本', 'releases') : ''}
+          </div>
+          {history.length === 0 && (
+            <p className="muted small" style={{ margin: '2px 0 6px' }}>
+              {t(
+                '还没读到历史版本。点上方「立即检查」拉一次；或者当前更新源只提供了单个版本。',
+                'No version history yet. Hit Check now, or this update source exposes only one release.'
+              )}
+            </p>
+          )}
           <div className="rel-timeline">
             {history.map((r) => {
               const isOpen = expanded === r.version

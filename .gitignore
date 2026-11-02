@@ -36,3 +36,5 @@ Thumbs.db
 .tmp-ud/
 .tmp-cfpa/
 .pub-*.log
+# 音乐生成脚本的中间 wav
+.tmp-music/

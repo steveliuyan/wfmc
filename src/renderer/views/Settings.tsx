@@ -53,6 +53,8 @@ export default function SettingsView() {
   const [foundData, setFoundData] = useState<Awaited<ReturnType<typeof api.dataDiscover>>>([])
   // 数据目录占用（主进程有缓存，点了才统计）
   const [dataSize, setDataSize] = useState<{ bytes: number; partial: boolean } | null>(null)
+  // 一键删除全部数据正在跑（按钮变灰，防止连点）
+  const [wiping, setWiping] = useState(false)
   // 数据目录体检：放在安装目录里的话，更新安装包会把整份数据清掉（踩过：D:\WFMC\data 每次更新都没）
   const [health, setHealth] = useState<{ installDir: string; insideInstall: boolean } | null>(null)
   useEffect(() => {
@@ -204,16 +206,17 @@ export default function SettingsView() {
       </header>
 
       <div className="settings-shell">
-        <nav className="settings-rail">
-          <div className="rail-title">设置分区</div>
+        {/* 图标条：只留图标，鼠标停一下才浮出分区名（data-label 给 CSS ::after 用） */}
+        <nav className="settings-rail" aria-label="设置分区">
           {RAIL.map((item) => (
             <button
               key={item.id}
               className={activeSec === item.id ? 'on' : ''}
               onClick={() => jumpTo(item.id)}
+              data-label={item.label}
+              aria-label={item.label}
             >
               <span className="rail-dot">{item.icon}</span>
-              {item.label}
             </button>
           ))}
         </nav>
@@ -567,12 +570,61 @@ export default function SettingsView() {
                   onClick={async () => {
                     const dir = await api.pickFolder()
                     if (!dir) return
+                    const oldDir = settings.dataDir || dataDir
+                    const norm = (s: string) => s.replace(/[\\/]+$/, '').toLowerCase()
+                    if (oldDir && norm(dir) === norm(oldDir)) {
+                      toast('选的还是当前目录，没换', 'info')
+                      return
+                    }
+                    // 旧目录里还有东西的话，问一句要不要一起搬过去（只复制，旧目录原样留着）
+                    let migrate = false
+                    try {
+                      const list = await api.dataDiscover()
+                      const old = list.find((d) => d.active)
+                      if (old && (old.instances > 0 || old.accounts > 0)) {
+                        if (norm(dir).startsWith(norm(old.dir) + '\\')) {
+                          toast('新目录在旧目录里面，不搬（会自己复制自己）', 'info')
+                        } else {
+                          migrate = await askConfirm({
+                            title: '把旧目录的数据搬过去？',
+                            message:
+                              `旧目录 ${old.dir} 里还有 ${old.instances} 个实例、${old.accounts} 个账号。` +
+                              `要复制到新目录 ${dir} 吗？只复制不删旧目录，确认新目录没问题后旧目录你自己清理。`,
+                            okText: '复制过去',
+                            cancelText: '不搬，只要空目录'
+                          })
+                        }
+                      }
+                    } catch {
+                      /* 查不到旧数据就算了，直接换 */
+                    }
                     try {
                       const r = await api.setDataDir(dir)
                       await saveSettings({})
                       await Promise.all([refreshInstances(), refreshAccounts()])
                       setPinfo(await api.dataSharedInfo())
+                      refreshFound()
                       toast(`数据目录已改成 ${r.dir}（那边有 ${r.instances} 个实例，重启后也是这个）`, 'success')
+                      if (migrate && oldDir) {
+                        toast('开始把旧目录的数据复制过来，进度看任务列表', 'info')
+                        try {
+                          const m = await api.migrateData(oldDir)
+                          await Promise.all([refreshInstances(), refreshAccounts()])
+                          setPinfo(await api.dataSharedInfo())
+                          refreshFound()
+                          toast(
+                            `迁移完成：复制 ${m.copied} 个文件（${formatSize(m.bytes)}）` +
+                              `${m.skipped ? `，跳过 ${m.skipped} 个同名的` : ''}` +
+                              `${m.accounts ? `，并入 ${m.accounts} 个账号` : ''}`,
+                            'success'
+                          )
+                        } catch (e) {
+                          toast(
+                            `迁移失败：${(e as Error).message}。数据目录已经换过去了，旧目录还在，可以手动复制`,
+                            'error'
+                          )
+                        }
+                      }
                     } catch (e) {
                       toast(`换目录失败：${(e as Error).message}`, 'error')
                     }
@@ -732,6 +784,61 @@ export default function SettingsView() {
               </div>
               <p className="set-note">
                 删之前会把旧的 accounts.json 留成 <code>.bak</code>，反悔了还能捞回来。
+              </p>
+            </div>
+            <div className="set-block">
+              <div className="set-block-title">
+                <span>危险操作</span>
+                <span className="muted small">删了就没了，删前请看清</span>
+              </div>
+              <div className="set-actions">
+                <button
+                  className="btn danger sm"
+                  disabled={wiping}
+                  onClick={async () => {
+                    const dir = settings.dataDir || dataDir
+                    const ok1 = await askConfirm({
+                      title: '一键删除全部数据',
+                      message:
+                        `即将清空 ${dir} 里的全部内容：所有实例、游戏版本、mods、资源包、存档、截图、账号、日志。` +
+                        '这不是「清空记录」，是真的把文件删掉，删完没法恢复。账号会先留一份 accounts.json.bak。',
+                      okText: '我明白，继续',
+                      danger: true
+                    })
+                    if (!ok1) return
+                    const ok2 = await askConfirm({
+                      title: '最后一次确认',
+                      message: '真的要删吗？想留存档的话先取消，点上面「打开」把 saves 复制出去，或者用「更换数据目录」换个地方再删。',
+                      okText: '删除全部数据',
+                      cancelText: '不了',
+                      danger: true
+                    })
+                    if (!ok2) return
+                    setWiping(true)
+                    try {
+                      const r = await api.wipeData()
+                      await Promise.all([refreshInstances(), refreshAccounts(), saveSettings({})])
+                      refreshFound()
+                      setDataSize(null)
+                      toast(
+                        `已清空数据目录（${r.removed} 项）` +
+                          `${r.failed ? `，${r.failed} 项没删掉（可能被游戏/程序占用，关掉再试）` : ''}` +
+                          `${r.accountBackup ? '，账号已备份成 .bak' : ''}`,
+                        r.failed ? 'error' : 'success'
+                      )
+                    } catch (e) {
+                      toast(`删除失败：${(e as Error).message}`, 'error')
+                    } finally {
+                      setWiping(false)
+                    }
+                  }}
+                >
+                  {wiping ? '正在删除…' : '一键删除全部数据（含账号）'}
+                </button>
+              </div>
+              <p className="set-note">
+                等于把启动器恢复到刚装好的样子：实例列表、游戏版本、mods、存档、账号全部清掉，程序本身不动。
+                旧目录不会自动删，删完目录还在，可以直接用。
               </p>
             </div>
           </section>

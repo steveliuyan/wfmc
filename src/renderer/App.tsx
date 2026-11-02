@@ -538,9 +538,13 @@ function Shell() {
         </nav>
 
         {newRelease && (
-          <button className="update-banner" onClick={() => setPage('settings')}>
+          <button className="update-banner" onClick={() => setPage('settings')} title={`新版本 ${newRelease.version}`}>
             <span className="update-banner-dot" />
-            发现新版本 v{newRelease.version} · 去更新
+            <span className="update-banner-body">
+              <span className="update-banner-title">发现新版本</span>
+              <span className="update-banner-sub">v{newRelease.version} · 点这里去更新</span>
+            </span>
+            <span className="update-banner-go">→</span>
           </button>
         )}
 
