@@ -7,6 +7,7 @@ import type { ProgressFn } from '../shared/types'
 import { store } from './store'
 import { gamePathFor } from './paths'
 import { downloadFile } from './net'
+import { buildPackIndex, servePack, type PackIndex } from './lanshare'
 
 /**
  * 服务端环境同步：
@@ -32,6 +33,8 @@ export interface ServerManifest {
   at: number
   /** 客户端可用这个前缀直接下 mod */
   base?: string
+  /** 房主是否开了「整包直传」（游戏文件 + 模组 + Java 运行时，好友可以直接拷贝） */
+  pack?: boolean
 }
 
 function serverDir(id: string): string {
@@ -81,13 +84,15 @@ export function buildManifest(id: string): ServerManifest | undefined {
 
 const running = new Map<string, { server: http.Server; port: number }>()
 
-/** 清单 HTTP 处理器：只暴露 /manifest.json 与 /mods/<文件名>，其它 404（每次请求重算，改了 mod 立刻生效） */
+/** 清单 HTTP 处理器：暴露 /manifest.json、/mods/<文件名>、/pack/*（整包直传），其它 404（每次请求重算，改了 mod 立刻生效） */
 function manifestHandler(
   getManifest: () => ServerManifest | undefined,
-  getModsDir: () => string
+  getModsDir: () => string,
+  getPack?: () => PackIndex | undefined
 ): http.RequestListener {
   return (req, res) => {
     const url = decodeURIComponent((req.url ?? '/').split('?')[0])
+    if (getPack && url.startsWith('/pack/') && servePack(req, res, url, getPack)) return
     const fresh = getManifest()
     if (!fresh) {
       res.writeHead(500).end('no manifest')
@@ -208,13 +213,18 @@ export function buildInstanceManifest(instanceId: string): ServerManifest | unde
     loaderVersion: instance.loaderVersion,
     gamePort: 0,
     mods,
-    at: Date.now()
+    at: Date.now(),
+    // 本地有游戏目录就能整包直传（好友缺版本文件 / Java 时直接从这里拷）
+    pack: fs.existsSync(gamePathFor(instance))
   }
 }
 
 /**
  * 给「对局域网开放」的房间发布清单。
  * preferredPort 一般是游戏局域网端口 + 1（主机侧探测规则就是 +1/+2/+3）。
+ *
+ * 注意：端口变了要真的搬过去。原来「已经在跑就直接返回旧端口」，结果游戏换了个
+ * 端口开房间后，好友按新端口探过来永远探不到清单。
  */
 export async function startInstanceManifest(
   instanceId: string,
@@ -222,14 +232,28 @@ export async function startInstanceManifest(
 ): Promise<{ port: number; mods: number } | undefined> {
   if (runningInstances.has(instanceId)) {
     const cur = runningInstances.get(instanceId)!
-    return { port: cur.port, mods: buildInstanceManifest(instanceId)?.mods.length ?? 0 }
+    const want = preferredPort || 0
+    if (!want || cur.port === want) {
+      return { port: cur.port, mods: buildInstanceManifest(instanceId)?.mods.length ?? 0 }
+    }
+    stopInstanceManifest(instanceId)
   }
   const manifest = buildInstanceManifest(instanceId)
   if (!manifest) return undefined
   const instance = store.getInstance(instanceId)!
+  // 整包索引比较重（要走一遍几十万个文件），一次请求算一次太浪费：缓存 60 秒
+  let cached: { index?: PackIndex; at: number } = { at: 0 }
+  const getPack = () => {
+    const now = Date.now()
+    if (now - cached.at > 60_000) {
+      cached = { index: buildPackIndex(instanceId), at: now }
+    }
+    return cached.index
+  }
   const handler = manifestHandler(
     () => buildInstanceManifest(instanceId),
-    () => path.join(gamePathFor(instance), 'mods')
+    () => path.join(gamePathFor(instance), 'mods'),
+    () => getPack()
   )
   const started = await listenFirst([preferredPort, preferredPort + 1, preferredPort + 2, 0], handler)
   if (!started) return undefined
@@ -342,7 +366,7 @@ export async function syncEnvironment(
   instanceId: string,
   diff: EnvDiff,
   onProgress?: ProgressFn
-): Promise<{ added: number; failed: string[] }> {
+): Promise<{ added: number; failed: string[]; stillMissing: string[] }> {
   const instance = store.getInstance(instanceId)
   if (!instance || !diff.manifest || !diff.base) throw new Error('缺少同步信息')
   const modsDir = path.join(gamePathFor(instance), 'mods')
@@ -351,6 +375,34 @@ export async function syncEnvironment(
   const failed: string[] = []
   let added = 0
   let index = 0
+  const base = diff.base
+
+  /**
+   * 下完必须验一遍 sha1/大小。
+   * 以前只要 downloadFile 没抛异常就算成功 —— 但局域网里经常出现「文件写下去了、
+   * 内容缺一截」（房主那边正好在改 mod、连接被掐、磁盘满）：
+   * 文件躺在 mods/ 里、sha1 对不上，Fabric/Forge 会**静默跳过**它，
+   * 玩家看到的就是「模组装了但游戏里不生效 / 别人的方块我这儿看不见」。
+   */
+  const fetchVerified = async (mod: ModRef, dest: string, attempt = 1): Promise<void> => {
+    await downloadFile(`${base}/mods/${encodeURIComponent(mod.file)}`, dest, undefined, { skipIfExists: false })
+    let ok = false
+    try {
+      const got = sha1File(dest)
+      ok = got.size === mod.size && got.sha1 === mod.sha1
+    } catch {
+      ok = false
+    }
+    if (ok) return
+    try {
+      fs.unlinkSync(dest)
+    } catch {
+      /* 删不掉就覆盖写 */
+    }
+    if (attempt >= 2) throw new Error('文件校验不通过')
+    await fetchVerified(mod, dest, attempt + 1)
+  }
+
   for (const mod of diff.missing) {
     index++
     onProgress?.({
@@ -360,14 +412,26 @@ export async function syncEnvironment(
       total: diff.missing.length
     })
     try {
-      await downloadFile(`${diff.base}/mods/${encodeURIComponent(mod.file)}`, path.join(modsDir, mod.file), undefined, {
-        skipIfExists: false
-      })
+      await fetchVerified(mod, path.join(modsDir, mod.file))
       added++
     } catch {
       failed.push(mod.file)
     }
   }
-  onProgress?.({ key: 'env-sync', phase: `补齐完成（${added} 个）`, current: diff.missing.length, total: diff.missing.length })
-  return { added, failed }
+
+  // 再对一遍账：真的少了什么就说清楚，别拿「已自动补齐 N 个」糊弄过去
+  let stillMissing: string[] = []
+  try {
+    stillMissing = compareEnvironment(instanceId, diff.manifest, base).missing.map((m) => m.file)
+  } catch {
+    stillMissing = failed.slice()
+  }
+
+  onProgress?.({
+    key: 'env-sync',
+    phase: stillMissing.length ? `补齐完成（还缺 ${stillMissing.length} 个）` : `补齐完成（${added} 个）`,
+    current: diff.missing.length,
+    total: diff.missing.length
+  })
+  return { added, failed, stillMissing }
 }

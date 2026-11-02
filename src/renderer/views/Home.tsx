@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
 import lottie from 'lottie-web'
-import { api, friendlyError, formatDuration } from '../api'
+import { api, friendlyError, formatDuration, formatLastPlayed, formatSize } from '../api'
 import { useLauncher, useT } from '../store'
 import symbolAnim from '../assets/lottie-symbol.json'
 import type { PageId } from '../App'
 
-const BLOCK_IDS = ['stats', 'quick', 'log']
+// 默认落位：左边数据面板、右边启动日志（两块并排等高），快捷操作整行放下面
+const BLOCK_IDS = ['stats', 'log', 'quick']
 const BLOCK_NAMES: Record<string, string> = { stats: '数据面板', quick: '快捷操作', log: '启动日志' }
 const normalizeLayout = (v?: string[]) => {
   const kept = (v ?? []).filter((x) => BLOCK_IDS.includes(x))
@@ -26,11 +27,20 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
     settings,
     saveSettings,
     refreshInstances,
+    refreshAccounts,
+    accounts,
+    askConfirm,
+    dataDir,
     runningTask
   } = useLauncher()
   const t = useT()
   const [busy, setBusy] = useState(false)
   const [running, setRunning] = useState(false)
+  // 数据目录占多大（主进程带缓存，最多走 2.5 秒盘）
+  const [dataSize, setDataSize] = useState<{ bytes: number; partial: boolean } | null>(null)
+  // 数据目录体检结果：insideInstall = 放在安装目录里了（更新会把它清空）
+  const [dataHealth, setDataHealth] = useState<{ installDir: string; insideInstall: boolean } | null>(null)
+  const [dataBusy, setDataBusy] = useState(false)
   const logRef = useRef<HTMLPreElement>(null)
   const animRef = useRef<HTMLDivElement>(null)
 
@@ -79,9 +89,78 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
       .catch(() => undefined)
   }, [instances.length])
 
+  // 更新/换版本之后，启动时可能自动接上了旧数据 —— 说一句，免得玩家以为「数据没了」
+  useEffect(() => {
+    api
+      .adoptInfo()
+      .then((info) => {
+        if (!info) return
+        const where = info.to.length > 42 ? `…${info.to.slice(-40)}` : info.to
+        const acc = info.accounts > 0 ? `，${info.accounts} 个账号也一起找回来了` : ''
+        toast(`接着用之前的数据了：${where}${acc}`, 'success')
+        refreshInstances()
+      })
+      .catch(() => undefined)
+  }, [])
+
   useEffect(() => {
     layoutRef.current = layout
   }, [layout])
+
+  // 数据目录占多大：显示在「本机」那一块，换了目录/清完数据要重算
+  const refreshDataSize = () => {
+    api
+      .dataSize()
+      .then((r) => setDataSize({ bytes: r.bytes, partial: r.partial }))
+      .catch(() => setDataSize(null))
+    // 顺手体检一次：数据目录要是落在安装目录里，更新安装包会把整份数据带走，必须红字提示
+    api
+      .dataHealth()
+      .then((h) => setDataHealth({ installDir: h.installDir, insideInstall: h.insideInstall }))
+      .catch(() => setDataHealth(null))
+  }
+  useEffect(() => {
+    refreshDataSize()
+  }, [settings?.dataDir])
+
+  // 数据面板里的「换目录 / 清空账号」：不用跑设置页也能就地改
+  const pickDataDir = async () => {
+    const dir = await api.pickFolder()
+    if (!dir) return
+    setDataBusy(true)
+    try {
+      const r = await api.setDataDir(dir)
+      await saveSettings({})
+      await Promise.all([refreshInstances(), refreshAccounts()])
+      refreshDataSize()
+      toast(`数据目录已换成 ${r.dir}（那边有 ${r.instances} 个实例）`, 'success')
+    } catch (e) {
+      toast(friendlyError(e), 'error')
+    } finally {
+      setDataBusy(false)
+    }
+  }
+
+  const clearAccounts = async () => {
+    const ok = await askConfirm({
+      title: '清空账号',
+      message: `会把当前数据目录里的 ${accounts.length} 个账号（离线 / 正版 / 外置）全部删掉；实例、存档、模组一个都不动，删之前还会留一份 accounts.json.bak。`,
+      okText: '清空账号',
+      danger: true
+    })
+    if (!ok) return
+    setDataBusy(true)
+    try {
+      const r = await api.clearData('accounts')
+      await Promise.all([refreshAccounts(), saveSettings({})])
+      refreshDataSize()
+      toast(`已清空 ${r.cleared} 个账号（备份在 accounts.json.bak）`, 'success')
+    } catch (e) {
+      toast(friendlyError(e), 'error')
+    } finally {
+      setDataBusy(false)
+    }
+  }
 
   useEffect(() => {
     const next = normalizeLayout(settings?.homeLayout)
@@ -246,9 +325,29 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
   const renderBlock = (id: string) => {
     if (id === 'stats') {
       const max = Math.max(...instances.map((x) => x.playTimeMs ?? 0), 1)
+      const totalMs = instances.reduce((s, i) => s + (i.playTimeMs ?? 0), 0)
+      const installedCount = instances.filter((i) => i.installed).length
+      const latest = [...instances].filter((i) => i.lastPlayed).sort((a, b) => (b.lastPlayed ?? 0) - (a.lastPlayed ?? 0))[0]
       return (
         <>
           <h3>数据面板</h3>
+          {/* 顶上三个小格子：先把「玩了多少」讲清楚，下面的条形图才不会孤零零挂在中间 */}
+          <div className="stat-tiles">
+            <div>
+              <b>{instances.length}</b>
+              <span>个实例</span>
+            </div>
+            <div>
+              <b title={totalMs ? formatDuration(totalMs) : undefined}>{formatDuration(totalMs)}</b>
+              <span>累计游玩</span>
+            </div>
+            <div>
+              <b>
+                {installedCount}/{instances.length}
+              </b>
+              <span>已装好</span>
+            </div>
+          </div>
           <div className="stat-bars">
             {[...instances]
               .sort((a, b) => (b.playTimeMs ?? 0) - (a.playTimeMs ?? 0))
@@ -270,10 +369,56 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
               })}
             {instances.length === 0 && <div className="muted small">还没有实例，去「实例」页建一个。</div>}
           </div>
-          <div className="muted small" style={{ marginTop: 10 }}>
-            共 {instances.length} 个实例 · 总时长{' '}
-            {formatDuration(instances.reduce((s, i) => s + (i.playTimeMs ?? 0), 0))} · 已装{' '}
-            {instances.filter((i) => i.installed).length} 个
+          {/* 实例少的时候中间会空一截，用本机信息填住（顺便让人一眼看到数据存在哪） */}
+          <div className="stat-extra">
+            <div className="mini-label">本机</div>
+            <div className="kv">
+              <span>数据目录</span>
+              <b className="ellipsis" title={settings?.dataDir}>
+                {settings?.dataDir ? `…\\${settings.dataDir.split(/[\\/]/).filter(Boolean).slice(-2).join('\\')}` : '—'}
+              </b>
+            </div>
+            {dataHealth?.insideInstall && (
+              <div className="muted small warn-text">
+                ⚠ 数据目录在安装目录（{dataHealth.installDir}）里，更新安装包会把它清空 —— 点「换目录」挪出去
+              </div>
+            )}
+            <div className="kv">
+              <span>默认内存</span>
+              <b>{settings?.maxMemory ? `${settings.maxMemory} MB` : '默认'}</b>
+            </div>
+            <div className="kv">
+              <span>Java</span>
+              <b className="ellipsis" title={settings?.javaPath || '自动选择'}>
+                {settings?.javaPath ? settings.javaPath.split(/[\\/]/).filter(Boolean).pop() : '自动选择'}
+              </b>
+            </div>
+            <div className="kv">
+              <span>占用</span>
+              <b>
+                {dataSize
+                  ? `${formatSize(dataSize.bytes)}${dataSize.partial ? ' +' : ''}`
+                  : '统计中…'}
+              </b>
+            </div>
+            <div className="stat-actions">
+              <button className="btn ghost sm" disabled={dataBusy} onClick={pickDataDir} title="换一个数据目录（只换指向，不复制不删文件）">
+                换目录
+              </button>
+              <button
+                className="btn ghost sm danger"
+                disabled={dataBusy || accounts.length === 0}
+                onClick={clearAccounts}
+                title="清空账号列表，实例和存档不动"
+              >
+                清空账号{accounts.length ? `（${accounts.length}）` : ''}
+              </button>
+            </div>
+          </div>
+          <div className="stat-foot muted small">
+            {latest
+              ? `最近启动：${latest.name} · ${formatLastPlayed(latest.lastPlayed ?? 0)}`
+              : '还没启动过游戏，先装一个实例吧。'}
           </div>
         </>
       )
@@ -504,7 +649,9 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
             </div>
             <div className="stat">
               <span>最近启动</span>
-              <b>{current.lastPlayed ? new Date(current.lastPlayed).toLocaleString() : '还没玩过'}</b>
+              <b title={current.lastPlayed ? new Date(current.lastPlayed).toLocaleString() : undefined}>
+                {current.lastPlayed ? formatLastPlayed(current.lastPlayed) : '还没玩过'}
+              </b>
             </div>
             <div className="stat">
               <span>内存设置</span>
@@ -539,7 +686,7 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
         </div>
       </div>
 
-      <div className={`grid-2 ${editing ? 'editing' : ''}`} ref={gridRef}>
+      <div className={`grid-2 home-grid ${editing ? 'editing' : ''}`} ref={gridRef}>
         {layout.map((id) => (
           <div key={id} data-slot={id} className="slot">
             {dragId === id ? (

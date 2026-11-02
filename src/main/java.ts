@@ -5,6 +5,8 @@ import { resolveJava } from '@xmcl/installer'
 import type { JavaInfo } from '../shared/types'
 import { store } from './store'
 import { runProcess } from './proc'
+import { AbortError } from './net'
+import { runTask } from './tasks'
 
 /** 把「Java 安装目录」或「java.exe 路径」统一成真实可执行文件路径；不存在则丢弃 */
 function normalizeJavaPath(p?: string): string | undefined {
@@ -269,7 +271,11 @@ function platformKey(): string {
   return 'linux'
 }
 
-export async function installJavaRuntime(component: string, log?: (line: string) => void): Promise<string> {
+export async function installJavaRuntime(
+  component: string,
+  log?: (line: string) => void,
+  opts?: { signal?: AbortSignal; onBytes?: (done: number, total: number) => void }
+): Promise<string> {
   const dest = path.join(store.javaDir, component)
   const jvmLib = path.join(dest, 'bin', 'server', process.platform === 'win32' ? 'jvm.dll' : 'libjvm.so')
   // 上次下到一半被打断（有 .wfmc-partial 标记）就接着下；没标记又缺 jvm 库的，是老版本留下的坏目录，删掉重来
@@ -308,18 +314,19 @@ export async function installJavaRuntime(component: string, log?: (line: string)
   // 进度写进日志（有变化才写，最多每 3 秒一行），避免刷屏又不至于让用户以为卡死
   let lastLog = 0
   let lastDone = -1
-  const timer = log
-    ? setInterval(() => {
-        const now = Date.now()
-        if (now - lastLog < 3000 || done === lastDone) return
-        lastLog = now
-        lastDone = done
-        const pct = total ? Math.min(99, Math.round((done / total) * 100)) : 0
-        const secs = Math.round((now - started) / 1000)
-        log(`[WFMC] 下载 Java 运行时 ${mb(done)} / ${mb(total)} MB（${pct}%，已等 ${secs}s）`)
-      }, 1000)
-    : undefined
-
+  opts?.onBytes?.(0, total)
+  const timer = setInterval(() => {
+    // 界面进度条（后台任务面板）每秒推一次
+    opts?.onBytes?.(done, total)
+    if (!log) return
+    const now = Date.now()
+    if (now - lastLog < 3000 || done === lastDone) return
+    lastLog = now
+    lastDone = done
+    const pct = total ? Math.min(99, Math.round((done / total) * 100)) : 0
+    const secs = Math.round((now - started) / 1000)
+    log(`[WFMC] 下载 Java 运行时 ${mb(done)} / ${mb(total)} MB（${pct}%，已等 ${secs}s）`)
+  }, 1000)
   try {
     // 分轮下载：一轮里个别文件实在下不动就先记下来，整轮结束后接着补，
     // 断网/抖动时不会因为一两个小文件把整份 94MB 判死（已下好的文件下一轮直接跳过）
@@ -334,6 +341,7 @@ export async function installJavaRuntime(component: string, log?: (line: string)
           const [rel, f] = item
           const raw = f.downloads?.raw
           if (!raw) continue
+          if (opts?.signal?.aborted) throw new AbortError('Java 下载已取消')
           const target = path.join(dest, rel.replace(/[\\/]+/g, path.sep))
           const size = raw.size ?? 0
           // 已下好的文件跳过——但要连 sha1 一起验：只比大小会把上次断流的坏文件永久跳过
@@ -372,8 +380,9 @@ export async function installJavaRuntime(component: string, log?: (line: string)
       }
     }
   } finally {
-    if (timer) clearInterval(timer)
+    clearInterval(timer)
   }
+  opts?.onBytes?.(done, total)
 
   log?.(`[WFMC] Java 运行时文件就绪：${finished} 个文件 / ${mb(total)} MB`)
 
@@ -474,10 +483,22 @@ export async function ensureJava(
   let installed = ''
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      installed = await installJavaRuntime(component, log)
+      // 走后台任务：右下角任务面板能看到进度、能取消（以前这里是「静默下载」，面板里什么都不显示）
+      installed = await runTask('java', `下载 Java ${major}（${component}）`, async (ctx) =>
+        installJavaRuntime(component, log, {
+          signal: ctx.signal,
+          onBytes: (doneBytes, totalBytes) =>
+            ctx.report({
+              phase: '下载 Java 运行时',
+              current: Math.round(doneBytes / 1048576),
+              total: Math.round(totalBytes / 1048576),
+              detail: `${Math.round(doneBytes / 1048576)} / ${Math.round(totalBytes / 1048576)} MB`
+            })
+        })
+      )
       break
     } catch (e) {
-      if (attempt === 2) {
+      if (attempt === 2 || e instanceof AbortError) {
         log?.(`[WFMC] Java ${major} 下载失败：${(e as Error).message}。可以到设置里手动指定一个 Java ${major}。`)
         throw e
       }

@@ -290,10 +290,40 @@ function Onboarding() {
 }
 
 function Shell() {
-  const { ready, instances, currentId, setCurrentId, accounts, toasts, settings, resolvedTheme, setTheme, toast, refreshInstances, saveSettings } = useLauncher()
+  const { ready, instances, currentId, setCurrentId, accounts, toasts, settings, resolvedTheme, setTheme, toast, refreshInstances, refreshAccounts, saveSettings } = useLauncher()
   const [health, setHealth] = useState<AccountHealth[]>([])
   const [newRelease, setNewRelease] = useState<{ version: string; tag: string } | undefined>()
   const [shellTick, setShellTick] = useState(0)
+  // 左下角账号：点一下就地展开列表切换，不用每次都跑设置页
+  const [acctOpen, setAcctOpen] = useState(false)
+  const [newName, setNewName] = useState('')
+  const activeAccount = accounts.find((x) => x.id === settings?.activeAccountId) ?? accounts[0]
+  const acctType = (t?: string) => (t === 'microsoft' ? '正版' : t === 'yggdrasil' ? '外置' : '离线')
+
+  const pickAccount = async (id: string) => {
+    try {
+      await api.setActiveAccount(id)
+      await saveSettings({})
+      await refreshAccounts()
+      setAcctOpen(false)
+      const a = accounts.find((x) => x.id === id)
+      toast(a ? `已切到 ${a.name}` : '已切换账号', 'success')
+    } catch (e) {
+      toast(`切换失败：${(e as Error).message}`, 'error')
+    }
+  }
+
+  const addOfflineQuick = async () => {
+    const name = newName.trim() || 'Steve'
+    try {
+      await api.addOffline(name)
+      await refreshAccounts()
+      setNewName('')
+      toast(`已添加离线账号 ${name}`, 'success')
+    } catch (e) {
+      toast(`添加失败：${(e as Error).message}`, 'error')
+    }
+  }
 
   // 登录态巡检：快过期时在侧边栏提示，点一下续期
   useEffect(() => {
@@ -527,8 +557,74 @@ function Shell() {
           <div className="mini-label" style={{ marginTop: 12 }}>
             账号
           </div>
-          <div className="account-chip">
-            {(() => { const a = accounts.find((x) => x.id === settings?.activeAccountId) ?? accounts[0]; return a ? `${a.name}${a.type === 'microsoft' ? ' · 正版' : a.type === 'yggdrasil' ? ' · 外置' : ' · 离线'}` : '未登录' })()}
+          <div className="account-picker">
+            <button
+              className={`account-chip ${acctOpen ? 'open' : ''}`}
+              onClick={() => setAcctOpen((v) => !v)}
+              title="点一下切换账号"
+            >
+              <span className="ellipsis">
+                {activeAccount ? `${activeAccount.name} · ${acctType(activeAccount.type)}` : '未登录'}
+              </span>
+              <span className="account-caret">{acctOpen ? '▴' : '▾'}</span>
+            </button>
+            {acctOpen && (
+              <>
+                <div
+                  className="acct-backdrop"
+                  onClick={() => setAcctOpen(false)}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    setAcctOpen(false)
+                  }}
+                />
+                <div className="acct-pop">
+                  <div className="mini-label">选择账号（{accounts.length}）</div>
+                  {accounts.length === 0 ? (
+                    <p className="muted small" style={{ margin: '2px 0 8px' }}>
+                      还没有账号，下面直接加一个离线的，或者去设置里登录正版 / 外置。
+                    </p>
+                  ) : (
+                    <div className="acct-list">
+                      {accounts.map((a) => {
+                        const on = (settings?.activeAccountId ?? accounts[0]?.id) === a.id
+                        return (
+                          <button key={a.id} className={`acct-item ${on ? 'on' : ''}`} onClick={() => pickAccount(a.id)}>
+                            <span className="ellipsis">{a.name}</span>
+                            <span className="muted small">{acctType(a.type)}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                  <div className="row" style={{ gap: 6, marginTop: 8 }}>
+                    <input
+                      className="input"
+                      placeholder="离线账号名"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') addOfflineQuick()
+                      }}
+                      style={{ flex: 1, minWidth: 0 }}
+                    />
+                    <button className="btn sm" onClick={addOfflineQuick}>
+                      添加
+                    </button>
+                  </div>
+                  <button
+                    className="btn ghost sm"
+                    style={{ width: '100%', marginTop: 6 }}
+                    onClick={() => {
+                      setAcctOpen(false)
+                      setPage('settings')
+                    }}
+                  >
+                    管理 / 登录正版、外置 →
+                  </button>
+                </div>
+              </>
+            )}
           </div>
           {accountWarn && (
             <button

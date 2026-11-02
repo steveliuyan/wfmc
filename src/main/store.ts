@@ -77,28 +77,173 @@ function writeJson(file: string, data: unknown) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8')
 }
 
-/** 老版本（改名前）的数据目录迁移：搬到新目录，保留已装好的实例 */
-function migrateLegacyDataDir() {
-  // 便携版是自包含的，不把用户机器上的旧数据拖进来（那是几百 MB 的复制）
-  if (process.env.PORTABLE_EXECUTABLE_DIR) return
-  const target = defaultDataDir()
-  if (fs.existsSync(path.join(target, 'instances'))) return
-  for (const legacy of LEGACY_DIR_NAMES) {
-    const old = path.join(app.getPath('appData'), legacy)
-    if (!fs.existsSync(old)) continue
-    try {
-      fs.mkdirSync(target, { recursive: true })
-      // 只搬我们需要的东西，别把旧 Chromium 缓存也拖过来
-      for (const name of ['instances', 'java', 'exports', 'backups', 'servers.json', 'accounts.json']) {
-        const from = path.join(old, name)
-        if (!fs.existsSync(from)) continue
-        fs.cpSync(from, path.join(target, name), { recursive: true, force: true })
-      }
-    } catch {
-      /* 迁移失败就继续用默认目录 */
-    }
-    return
+/**
+ * 这台机器上可能存过启动器数据的地方。
+ *
+ * 「更新一版数据就没了」几乎从来不是文件真被删 —— 是**指向变了**：
+ * 软件改过名（zhudong-mc-launcher → 诛冬启动器 → WFMC），
+ * 而且便携版的数据在 exe 旁边、安装版的数据在 %APPDATA%\\WFMC\\data，两套目录互不相干。
+ * 所以每次启动都把这些地方扫一遍，谁有内容就用谁。
+ */
+function dataCandidates(): string[] {
+  const appData = app.getPath('appData')
+  const list: string[] = []
+  const push = (p?: string) => {
+    if (!p) return
+    const abs = path.resolve(p)
+    if (!list.includes(abs)) list.push(abs)
   }
+  const portable = process.env.PORTABLE_EXECUTABLE_DIR
+  if (portable) {
+    push(path.join(portable, 'WFMC-Data'))
+  } else {
+    push(path.join(app.getPath('userData'), 'data'))
+    // 安装版也可能先跑过便携版：exe 旁边有 WFMC-Data / data 都算候选
+    const exeDir = path.dirname(process.execPath)
+    push(path.join(exeDir, 'WFMC-Data'))
+    push(path.join(exeDir, 'data'))
+  }
+  push(path.join(appData, 'WFMC', 'data'))
+  for (const legacy of LEGACY_DIR_NAMES) {
+    push(path.join(appData, legacy)) // 老版本数据直接放根目录
+    push(path.join(appData, legacy, 'data'))
+  }
+  push(path.join(appData, '诛冬启动器', 'data'))
+  push(path.join(appData, '诛冬启动器'))
+  return list
+}
+
+/** 这个目录下有几个实例（认 instances/<id>/instance.json） */
+function countInstances(dir: string): number {
+  try {
+    const inst = path.join(dir, 'instances')
+    if (!fs.existsSync(inst)) return 0
+    return fs.readdirSync(inst).filter((n) => fs.existsSync(path.join(inst, n, 'instance.json'))).length
+  } catch {
+    return 0
+  }
+}
+
+function readAccountList(dir: string): Account[] {
+  const raw = readJson<{ accounts: Account[] }>(path.join(dir, 'accounts.json'), { accounts: [] })
+  return Array.isArray(raw.accounts) ? raw.accounts : []
+}
+
+/** 一份数据「有多像真的」：实例算大头，账号其次 */
+function dataScore(dir: string): number {
+  if (!dir || !fs.existsSync(dir)) return 0
+  let score = countInstances(dir) * 10 + readAccountList(dir).length * 3
+  for (const name of ['java', 'backups', 'exports', 'servers', 'downloads']) {
+    if (fs.existsSync(path.join(dir, name))) score += 1
+  }
+  return score
+}
+
+/**
+ * 找账号时的目录清单：比 dataCandidates() 更宽。
+ * 便携版为了「自己一个文件夹里装得下」，dataDir 只在 exe 旁边找；
+ * 但账号不一样 —— 从安装版换到便携版（或者反过来）时，账号一定要捞回来，
+ * 所以这里把 %APPDATA% 下所有叫过这个名字的目录也算进来。
+ */
+function accountSources(): string[] {
+  const list = [...dataCandidates()]
+  const push = (p?: string) => {
+    if (!p) return
+    const abs = path.resolve(p)
+    if (!list.includes(abs)) list.push(abs)
+  }
+  const appData = app.getPath('appData')
+  push(app.getPath('userData'))
+  push(path.join(app.getPath('userData'), 'data'))
+  push(path.join(appData, 'WFMC'))
+  push(path.join(appData, 'WFMC', 'data'))
+  for (const legacy of LEGACY_DIR_NAMES) {
+    push(path.join(appData, legacy))
+    push(path.join(appData, legacy, 'data'))
+  }
+  push(path.join(appData, '诛冬启动器'))
+  push(path.join(appData, '诛冬启动器', 'data'))
+  return list
+}
+
+/** 安装版 exe 所在目录（便携版在临时目录里跑，不返回） */
+function installDirOf(): string | undefined {
+  if (process.env.PORTABLE_EXECUTABLE_DIR) return undefined
+  return path.resolve(path.dirname(process.execPath))
+}
+
+/** 这个目录是不是在安装目录里 —— 更新安装包会把整个安装目录清掉 */
+function insideInstallDir(dir: string): boolean {
+  const root = installDirOf()
+  if (!root) return false
+  const abs = path.resolve(dir)
+  return abs === root || abs.startsWith(root + path.sep)
+}
+
+/** load() 里「自动接上了旧数据」这件事，留给界面说一句话（只报一次） */
+let lastAdopt: { from: string; to: string; accounts: number } | null = null
+/** dataSize() 的缓存：目录 → 时间和结果（同一目录 5 分钟内不重复走盘） */
+const sizeCache = new Map<string, { at: number; value: { bytes: number; files: number; partial: boolean } }>()
+
+/**
+ * 数据继承（两件事）：
+ * 1) 当前目录没东西（或者比别处少）→ 只改「指向」，指到机器上最有内容的那份
+ *    （不复制几百 MB 的游戏文件）
+ * 2) 账号永远是并集 → 各处的 accounts.json 都并进来（按 id/uuid 去重），账号最不容易丢
+ * 返回是否改动了设置。
+ */
+function adoptExistingData(settings: Settings): boolean {
+  const candidates = dataCandidates()
+  const cur = settings.dataDir || defaultDataDir()
+  let changed = false
+  // dataDirCustom = 用户自己挑过目录，别再替他做主
+  if (!settings.dataDirCustom) {
+    const curScore = dataScore(cur)
+    let best = ''
+    let bestScore = curScore
+    for (const dir of candidates) {
+      if (path.resolve(dir) === path.resolve(cur)) continue
+      // 安装目录里的那份别接：更新安装包时整个安装目录会被清掉（见 setDataDir 的注释）
+      if (insideInstallDir(dir)) continue
+      const s = dataScore(dir)
+      if (s > bestScore) {
+        bestScore = s
+        best = dir
+      }
+    }
+    if (best) {
+      settings.dataDir = best
+      // 打上「自己挑过」的标记：便携版别再把它纠回 exe 旁边，否则刚找回来的数据下次又没了
+      settings.dataDirCustom = true
+      settings.useSharedData = false
+      changed = true
+      lastAdopt = { from: cur, to: best, accounts: 0 }
+    }
+  }
+  try {
+    const keep = readAccountList(settings.dataDir)
+    const seen = new Set(keep.map((a) => a.id || a.uuid))
+    let added = 0
+    for (const dir of accountSources()) {
+      if (path.resolve(dir) === path.resolve(settings.dataDir)) continue
+      for (const a of readAccountList(dir)) {
+        const key = a.id || a.uuid
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        keep.push(a)
+        added++
+      }
+    }
+    if (added > 0) {
+      writeJson(path.join(settings.dataDir, 'accounts.json'), { accounts: keep })
+      changed = true
+      if (!lastAdopt) lastAdopt = { from: '', to: settings.dataDir, accounts: 0 }
+      lastAdopt.accounts += added
+    }
+  } catch {
+    /* 合并账号失败不影响启动 */
+  }
+  return changed
 }
 
 class Store {
@@ -117,22 +262,25 @@ class Store {
   }
 
   load() {
-    migrateLegacyDataDir()
     this._settings = readJson(this.settingsFile, defaultSettings())
     // 旧配置里的 dataDir 如果还是旧路径，自动纠到新默认目录（并写回，避免每次都纠）
     let corrected = false
-    // 便携版：数据默认跟着 exe 走；用户可以显式选择「用本机已有的那份数据」（useSharedData）
-    if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    // 便携版：数据默认跟着 exe 走；用户可以显式选择「用本机已有的那份数据」（useSharedData），
+    // 也可以自己挑一个目录（dataDirCustom）—— 自己挑过就不要再纠回去，
+    // 否则「设置里改完数据目录，重启又变回 WFMC-Data」（用户报过）。
+    if (process.env.PORTABLE_EXECUTABLE_DIR && !this._settings.dataDirCustom) {
       const want = this._settings.useSharedData ? this.sharedDataDir() : defaultDataDir()
       if (this._settings.dataDir !== want) {
         this._settings.dataDir = want
         corrected = true
       }
     }
-    if (!this._settings.dataDir || this._settings.dataDir.includes('zhudong-mc-launcher')) {
+    if (!this._settings.dataDir) {
       this._settings.dataDir = defaultDataDir()
       corrected = true
     }
+    // 数据继承：装了新版本 / 便携版跟安装版换来换去之后，别让玩家看到「数据全没了」
+    if (adoptExistingData(this._settings)) corrected = true
     // 老配置里的「自动测速」经常测到官方源，国内下起来又慢又断；统一迁到国内镜像
     if (!this._settings.mirrorMigrated) {
       if (this._settings.downloadSource === 'auto') this._settings.downloadSource = 'mirror'
@@ -157,6 +305,7 @@ class Store {
 
   setSettings(patch: Partial<Settings>): Settings {
     this._settings = { ...this._settings, ...patch }
+    this.backup(this.settingsFile)
     writeJson(this.settingsFile, this._settings)
     fs.mkdirSync(this.dataDir, { recursive: true })
     fs.mkdirSync(this.instancesDir, { recursive: true })
@@ -175,7 +324,117 @@ class Store {
       accessToken: encryptToken(a.accessToken) ?? '',
       refreshToken: encryptToken(a.refreshToken)
     }))
+    this.backup(this.accountsFile)
     writeJson(this.accountsFile, { accounts: onDisk })
+  }
+
+  /** 写之前留一份上一版：手滑删号 / 写坏文件还能从 .bak 捞回来 */
+  private backup(file: string) {
+    try {
+      if (fs.existsSync(file)) fs.copyFileSync(file, file + '.bak')
+    } catch {
+      /* 备份失败不影响正常写入 */
+    }
+  }
+
+  /** 界面取一次「刚自动接上了旧数据」的说明，取完就清掉（只提示一次） */
+  adoptInfo() {
+    const info = lastAdopt
+    lastAdopt = null
+    return info
+  }
+
+  /** 设置页「找回旧数据」：列出机器上各份数据，各自有实例几个、账号几个 */
+  discoverData() {
+    const active = path.resolve(this.dataDir)
+    return accountSources()
+      .map((dir) => ({
+        dir,
+        name: path.basename(dir) || dir,
+        instances: countInstances(dir),
+        accounts: readAccountList(dir).length,
+        score: dataScore(dir),
+        active: path.resolve(dir) === active
+      }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+  }
+
+  /** 指到某一份旧数据上，并把别处的账号一起并过来 */
+  adoptDir(dir: string) {
+    const abs = path.resolve(dir)
+    if (!fs.existsSync(abs)) throw new Error(`目录不存在：${abs}`)
+    this.setSettings({ dataDir: abs, dataDirCustom: true, useSharedData: false })
+    adoptExistingData(this._settings)
+    writeJson(this.settingsFile, this._settings)
+    this.reloadAccounts()
+    lastAdopt = null // 是用户自己点的，设置页会 toast，别再重复提示
+    return { dir: abs, instances: countInstances(abs), accounts: this._accounts.length }
+  }
+
+  /**
+   * 一键清空：只清「记录」，不动游戏文件（versions/mods/saves 一个字节都不碰）。
+   * - accounts：清空账号列表（accounts.json 留 .bak，后悔还能从 .bak 捞）
+   * - playtime：把所有实例的累计游玩时长 / 最近启动时间归零
+   */
+  clearData(target: 'accounts' | 'playtime') {
+    if (target === 'accounts') {
+      const n = this._accounts.length
+      this.backup(this.accountsFile)
+      writeJson(this.accountsFile, { accounts: [] })
+      this._accounts = []
+      this.setSettings({ activeAccountId: undefined })
+      return { target, cleared: n, detail: this.dataDir }
+    }
+    let n = 0
+    for (const it of this.listInstances()) {
+      if (!it.playTimeMs && !it.lastPlayed) continue
+      this.saveInstance({ ...it, playTimeMs: 0, lastPlayed: undefined })
+      n++
+    }
+    return { target, cleared: n, detail: this.dataDir }
+  }
+
+  /**
+   * 数据目录占多大。设置页/数据面板要显示，但 data 里可能有几十 GB，
+   * 所以：异步走、最多 2.5 秒（超时就标记 partial）、结果缓存 5 分钟。
+   */
+  async dataSize(): Promise<{ dir: string; bytes: number; files: number; partial: boolean }> {
+    const dir = this.dataDir
+    const hit = sizeCache.get(dir)
+    if (hit && Date.now() - hit.at < 5 * 60_000) return { ...hit.value, dir }
+    const deadline = Date.now() + 2500
+    let bytes = 0
+    let files = 0
+    let partial = false
+    const walk = async (d: string) => {
+      if (Date.now() > deadline) {
+        partial = true
+        return
+      }
+      let ents: fs.Dirent[]
+      try {
+        ents = await fs.promises.readdir(d, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const e of ents) {
+        const p = path.join(d, e.name)
+        if (e.isDirectory()) await walk(p)
+        else if (e.isFile()) {
+          try {
+            bytes += (await fs.promises.stat(p)).size
+            files++
+          } catch {
+            /* 被占用/没权限就跳过 */
+          }
+        }
+      }
+    }
+    await walk(dir)
+    const value = { bytes, files, partial, at: Date.now() }
+    sizeCache.set(dir, { at: value.at, value: { bytes, files, partial } })
+    return { dir, bytes, files, partial }
   }
 
   /** 当前选中的账号（多账号切换用） */
@@ -196,9 +455,49 @@ class Store {
   /** 便携版切换数据来源：true = 用本机已安装的那份，false = 用自己的 WFMC-Data */
   setSharedData(on: boolean) {
     const dir = on ? this.sharedDataDir() : defaultDataDir()
-    this.setSettings({ useSharedData: on, dataDir: dir })
+    this.setSettings({ useSharedData: on, dataDir: dir, dataDirCustom: false })
     this.reloadAccounts()
     return dir
+  }
+
+  /** 用户手动指定数据目录（之后便携版也不会再把它纠回默认） */
+  setDataDir(dir: string) {
+    const abs = path.resolve(dir)
+    if (this.isInsideInstallDir(abs)) {
+      throw new Error(
+        `不能把数据目录放在安装目录里（${this.installDir()}）——更新或卸载安装包时会把整个安装目录清掉，` +
+          `游戏版本和存档会一起没。请换一个安装目录外面的文件夹，比如 D:\\WFMC-Data。`
+      )
+    }
+    fs.mkdirSync(abs, { recursive: true })
+    this.setSettings({ dataDir: abs, dataDirCustom: true, useSharedData: false })
+    this.reloadAccounts()
+    return abs
+  }
+
+  /**
+   * 安装版 exe 所在的目录（便携版不返回 —— 它本来就在临时目录里跑）。
+   *
+   * 为什么要盯着这个：NSIS 安装包在「更新」时会把整个安装目录挪走再删掉，
+   * 用户如果顺手把数据目录设在安装目录里（装到 D:\WFMC、数据选 D:\WFMC\data），
+   * 每更新一次 data 就整个没了。安装包那边已经改成只删程序文件（build\installer.nsh
+   * 的 customRemoveFiles），这里再从应用侧拦一道：不允许新选这种目录，已经选了的要提示。
+   */
+  installDir(): string | undefined {
+    return installDirOf()
+  }
+
+  isInsideInstallDir(dir: string): boolean {
+    return insideInstallDir(dir)
+  }
+
+  /** 数据目录「体检」：界面拿它显示风险提示 */
+  dataHealth() {
+    return {
+      dir: this.dataDir,
+      installDir: this.installDir() ?? '',
+      insideInstall: this.isInsideInstallDir(this.dataDir)
+    }
   }
 
   /** 换数据目录之后账号也要重读（实例列表是按需读盘的，不用管） */

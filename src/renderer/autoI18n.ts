@@ -112,6 +112,7 @@ function convertDynamic(value: string): string | undefined {
   if ((m = v.match(/^已装(.{1,6})（(\d+)）$/))) return `Installed ${m[1]} (${m[2]})`
   if ((m = v.match(/^(\d+) 个实例，总时长 (.+)$/))) return `${m[1]} instances, playtime ${m[2]}`
   if ((m = v.match(/^共 (\d+) 个实例$/))) return `${m[1]} instances`
+  if ((m = v.match(/^最近启动：(.+)$/))) return `Last launch: ${m[1]}`
   if ((m = v.match(/^已安装 (\d+) 个$/))) return `${m[1]} installed`
   if ((m = v.match(/^还剩 (.+)$/))) return `${m[1]} left`
   if ((m = v.match(/^TUNNEL (.+)$/))) return value

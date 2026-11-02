@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { api, type HostedServer, type LanWorld, type RoomEnv, type ServerManifest, type TunnelState, type UpnpResult } from '../api'
+import { api, type HostedServer, type LanWorld, type RoomEnv, type ScannedPort, type ServerManifest, type TunnelState, type UpnpResult } from '../api'
 import type { Instance } from '../../shared/types'
 import { useLauncher, useT } from '../store'
 import { joinWithSync } from '../joinWithSync'
@@ -34,7 +34,24 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
   const [shareHost, setShareHost] = useState('')
   const [roomCode, setRoomCode] = useState('')
   const [roomCodeLan, setRoomCodeLan] = useState('')
-  const [codeInput, setCodeInput] = useState('')
+  const [codeInput, setCodeInput] = useState(() => {
+    try {
+      return localStorage.getItem('wfmc.roomCodeInput') ?? ''
+    } catch {
+      return ''
+    }
+  })
+  // 切页面回来不要丢：每次改动都存一份到本地
+  useEffect(() => {
+    try {
+      localStorage.setItem('wfmc.roomCodeInput', codeInput)
+    } catch {
+      /* 隐私模式就算了 */
+    }
+  }, [codeInput])
+  // 「扫描端口」的结果（本机正在开着的游戏端口）
+  const [scanning, setScanning] = useState(false)
+  const [scanned, setScanned] = useState<ScannedPort[]>([])
   // 本机游戏「对局域网开放」实际用的端口（游戏里自己填的，不一定是 25565）
   const [myPort, setMyPort] = useState<{ instanceId?: string; port?: number }>({})
   // 当前实例的模组清单共享在哪个端口（0 = 没共享）
@@ -105,6 +122,27 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
       clearInterval(timer)
     }
   }, [currentId])
+
+  // 端口变了（手填 / 自动识别到新端口）→ 已经共享出去的模组清单要跟着搬到新端口。
+  // 不搬的话：先在默认 25565 点了「共享我的模组清单」，等游戏报出 1234 之后，
+  // 好友按房间里的 1234 探过来永远探不到清单（服务还挂在 25566）。
+  useEffect(() => {
+    if (!livePort || !currentId) return
+    if (livePort === port + 1) return
+    let alive = true
+    void api
+      .publishInstanceManifest(currentId, port + 1)
+      .then((r) => {
+        if (!alive || !r?.ok) return
+        setLivePort(r.port ?? port + 1)
+        setPublishedMods(r.mods ?? 0)
+        toast(`端口变了，模组清单已跟着换到 ${r.lanIp || lanIp}:${r.port}`, 'info')
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [port, currentId])
 
   // 局域网世界轮询
   useEffect(() => {
@@ -213,13 +251,51 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
     return true
   }
 
+  /**
+   * 进服前把「游戏文件」备齐。
+   * 优先走局域网整包直传：房主机器上有版本文件 / 模组 / Java 运行时，
+   * 同一个路由器下拷过来比让好友各自去外网下几百 MB 稳得多（版本对不上、Java 下不下来是大坑）。
+   */
+  const prepareFiles = async (id: string, address: string, portNumber: number): Promise<boolean> => {
+    const fresh = (await api.listInstances()).find((i) => i.id === id)
+    if (!fresh) {
+      toast('实例不见了（可能被删了），请重新选一个', 'error')
+      return false
+    }
+    if (fresh.installed) return true
+
+    const probe = await api
+      .serverSyncProbe(address, portNumber)
+      .catch(() => ({ found: false }) as { found: boolean; manifest?: ServerManifest })
+    const canDirect = !!(probe.found && probe.manifest?.pack)
+
+    if (canDirect) {
+      // 局域网里直接拷是用户明确要的默认行为：不再弹窗问一遍（问了也只是点「好」），
+      // 拷不动或者拷完还是不全，下面会自动退回去自己下载。
+      toast(`房主开着整包直传，从他那台机直接拷版本文件/模组/Java（进度在右下角，可以取消）…`, 'info')
+      try {
+        const r = await api.pullPackFromHost(id, address, portNumber)
+        if (!r.ok) toast(r.message || '拷贝没完成，接着自己下载补齐…', 'error')
+        else toast(`拷好了：${r.downloaded} 个文件，跳过 ${r.skipped} 个`, 'success')
+      } catch (e) {
+        toast(`从房主拷文件失败：${(e as Error).message}`, 'error')
+      }
+      await refreshInstances().catch(() => undefined)
+      const after = (await api.listInstances()).find((i) => i.id === id)
+      if (after?.installed) return true
+      toast('文件还是不全，接着自己下载补齐…', 'info')
+    }
+
+    return await ensureInstalled(id)
+  }
+
   /** 按房主环境建实例（这里只建，不装游戏，装什么由 ensureInstalled 统一管） */
   const createInstanceFor = async (env: RoomEnv): Promise<Instance | undefined> => {
     const mc = env.mcVersion as string
     const loader = env.loader ?? 'vanilla'
     const ok = await askConfirm({
       title: '建实例并进服',
-      message: `本地没有「${mc} · ${loaderName(loader)}」的实例。\n\n现在建一个再进服吗？建完会先下载游戏本体（几百 MB，看网速），装完才进服。`,
+      message: `本地没有「${mc} · ${loaderName(loader)}」的实例。\n\n现在建一个再进服吗？建完会先把游戏文件备齐：房主开着「整包直传」就直接从他机器上拷（局域网内很快，几百 MB 也不用等下载），否则才自己下载。装完才进服。`,
       okText: '建实例并进服'
     })
     if (!ok) return undefined
@@ -262,7 +338,10 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
       }
       if (!target) {
         if (!list.length) {
-          toast('本地还没有实例：用房主的房间码（码里带版本，会自动建实例），或先去「实例」页建一个', 'error')
+          toast(
+            '本地还没有实例，也没探到房主的房间信息（要房主也用 WFMC，并且联机页里显示「模组清单共享中」）。两个办法：① 让房主确认那边共享着；② 用房主的房间码进（码里带版本，会自动建实例并从他那拷文件）。',
+            'error'
+          )
           return
         }
         setPick({ address, port: portNumber, env })
@@ -271,7 +350,7 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
       }
       if (env?.mcVersion) toast(`用实例「${target.name}」进服（${env.mcVersion} · ${loaderName(env.loader)}）`, 'info')
       if (target.id !== currentId) setCurrentId(target.id)
-      if (!(await ensureInstalled(target.id))) return
+      if (!(await prepareFiles(target.id, address, portNumber))) return
       const joined = await joinWithSync({
         instanceId: target.id,
         host: address,
@@ -362,10 +441,54 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
               ))}
             </span>
           )}
+          <button
+            className="btn sm"
+            disabled={scanning}
+            onClick={async () => {
+              setScanning(true)
+              try {
+                const rows = await api.scanLanPorts()
+                setScanned(rows)
+                if (!rows.length) {
+                  toast('没扫到正在开的房间：先在游戏里点「对局域网开放」再扫一次', 'error')
+                } else if (rows.length === 1) {
+                  setPort(rows[0].port)
+                  toast(`扫到 ${rows[0].port} 端口上的房间，已帮你填好`, 'success')
+                } else {
+                  toast(`扫到 ${rows.length} 个端口，点一个填进输入框`, 'info')
+                }
+              } catch (e) {
+                toast(`扫描失败：${(e as Error).message}`, 'error')
+              } finally {
+                setScanning(false)
+              }
+            }}
+          >
+            {scanning ? '扫描中…' : '扫描端口'}
+          </button>
           <button className="btn sm" onClick={() => goto('hosting')}>
             去开服
           </button>
         </div>
+        {scanned.length > 0 && (
+          <div className="row wrap" style={{ marginTop: 8 }}>
+            <span className="muted small">扫到的房间：</span>
+            {scanned.map((s) => (
+              <button
+                key={s.port}
+                className={`chip${s.port === port ? ' on' : ''}`}
+                title={`${s.motd || '未命名房间'}${s.version ? ` · ${s.version}` : ''}${
+                  s.players ? ` · ${s.players.online}/${s.players.max} 人` : ''
+                }`}
+                onClick={() => setPort(s.port)}
+              >
+                {s.port}
+                {s.version ? ` · ${s.version}` : ''}
+                {s.motd ? ` · ${s.motd.slice(0, 16)}` : ''}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* 1. 局域网 */}
@@ -426,6 +549,14 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
               这个地址是给<strong>好友</strong>用的：他那边「局域网联机」列表里会出现你的房间，右边显示「版本 · 加载器 · N 个模组」，
               点「进入」时缺的 mod 会自动从你这台机下载、补齐后进服。<strong>你自己这边不会有什么变化</strong>（不需要下载自己的 mod），
               所以别在自己的列表里找「下载」；想验证就在好友那台机上打开联机页看一眼。
+            </div>
+            <div className="muted small" style={{ marginTop: 4 }}>
+              同一个服务还带着<strong>整包直传</strong>：好友那边缺游戏版本文件、缺 Java 运行时，也能直接从你这台机拷，
+              不用各自去外网下几百 MB（国内下 Java 经常断，这条路最稳）。
+            </div>
+            <div className="muted small" style={{ marginTop: 4 }}>
+              传的只有<strong>能进服必需的东西</strong>：版本文件、libraries、assets、mods、config 和 Java 运行时。
+              <strong>存档（saves）、日志、截图、资源包都不传</strong> —— 你的世界还是你自己的。
             </div>
           </div>
         )}
@@ -496,6 +627,11 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
                   <span className={manifest ? 'badge ok' : 'muted small'}>
                     {manifest ? envText(manifest) : probe ? '环境未知（房主没开 WFMC 共享）' : '探测中…'}
                   </span>
+                  {manifest?.pack && !isMine && (
+                    <span className="badge" title="房主开着整包直传：缺的文件可以从他机器上直接拷，不用重新下载">
+                      可直传
+                    </span>
+                  )}
                   <button
                     className="btn sm primary"
                     onClick={() =>

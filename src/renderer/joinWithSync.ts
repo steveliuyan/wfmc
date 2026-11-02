@@ -53,25 +53,49 @@ export async function joinWithSync({ instanceId, host, port, toast, askConfirm }
   }
 
   if (diff.missing.length > 0) {
-    const list = diff.missing
-      .slice(0, 8)
-      .map((m, i) => `${i + 1}. ${m.file}`)
-      .join('\n')
-    const more = diff.missing.length > 8 ? `\n…还有 ${diff.missing.length - 8} 个` : ''
-    const ok = await askConfirm({
-      title: '这个服需要额外模组',
-      message: `服务器「${diff.manifest?.name ?? host}」有 ${diff.missing.length} 个你没有的模组，不装直接进会连不上或被踢。\n\n${list}${more}\n\n现在从服务器自动下载补齐（${(diff.missing.reduce((s, m) => s + m.size, 0) / 1024 / 1024).toFixed(1)} MB），补完直接进服？`,
-      okText: '下载并进入',
-      cancelText: '先不进'
-    })
-    if (!ok) return false
+    // 用户要的就是「点进入 → 自动搞定」：缺模组是进不去的硬条件，
+    // 所以不再弹窗问一遍（问了也只能点「好」），直接补，进度在右下角。
+    const mb = (diff.missing.reduce((s, m) => s + m.size, 0) / 1024 / 1024).toFixed(1)
+    toast(`服务器要 ${diff.missing.length} 个模组（${mb} MB），自动从房主那补齐…`, 'info')
 
     const res = await api.serverSyncApply(instanceId, diff)
-    if (res.failed.length > 0) {
-      toast(`${res.added} 个补齐成功，${res.failed.length} 个失败（${res.failed[0]}…），先重试一次`, 'error')
-      return false
+    let added = res.added
+    let still = res.stillMissing ?? res.failed
+
+    if (still.length > 0) {
+      // 一条条下模组在局域网里容易半截断掉（sha1 对不上，游戏就当没装 = 幸运方块丢不出来）。
+      // 换个更笨但更稳的路子：把房主那份整包文件直接拷过来，再复查一次。
+      toast(`还有 ${still.length} 个没下全，改用「整包直传」再试一次…`, 'info')
+      try {
+        const pack = await api.pullPackFromHost(instanceId, host, port)
+        if (pack.ok) {
+          const re = await api.serverSyncCheck(instanceId, host, port)
+          if (re && re.reachable) {
+            added += Math.max(0, still.length - re.missing.length)
+            still = re.missing.map((m) => m.file)
+          }
+        }
+      } catch {
+        /* 整包直传也失败了：下面按 still 处理，不挡死 */
+      }
     }
-    toast(`已自动补齐 ${res.added} 个模组`, 'success')
+
+    if (still.length > 0) {
+      const names = still.slice(0, 5).join('、')
+      const more = still.length > 5 ? ` 等 ${still.length} 个` : ''
+      // 不硬拦了：房主可能刚点共享、整包还没建好、或者玩家就是想先试试。
+      // 把「为什么可能进不去」讲清楚，让他自己决定。
+      const go = await askConfirm({
+        title: '还有模组没到位',
+        message: `服务器要的模组里还有 ${still.length} 个没弄到（${names}${more}）。\n\n现在进去大概率会被踢，或者方块/物品在你这儿显示不出来（比如幸运方块丢不出来）。\n\n建议先让房主在联机页确认「模组清单共享中」亮着，再点一次进入；想先试试也可以。`,
+        okText: '仍然进入',
+        cancelText: '先不进',
+        danger: true
+      })
+      if (!go) return false
+    } else {
+      toast(`已自动补齐 ${added} 个模组`, 'success')
+    }
   }
 
   if (diff.extra.length > 0) {

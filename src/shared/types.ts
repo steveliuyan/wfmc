@@ -7,6 +7,12 @@ export interface Settings {
   dataDir: string
   /** 便携版专用：true = 直接用本机安装版的那份数据（%APPDATA%/WFMC/data），false = 用自己的 WFMC-Data */
   useSharedData?: boolean
+  /**
+   * 用户自己挑过数据目录。
+   * 便携版默认把数据放 exe 旁边的 WFMC-Data，启动时会强行纠回去；
+   * 有这个标记，手动选过的目录就不会再被纠回默认（以前换完目录重启又变回去了）。
+   */
+  dataDirCustom?: boolean
   /** 界面主题 */
   theme: ThemeMode
   /** 下载源：official = 官方，mirror = 国内镜像(BMCLAPI) */

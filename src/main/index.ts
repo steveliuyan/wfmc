@@ -100,8 +100,10 @@ function createWindow() {
           const image = await win.webContents.capturePage()
           fs.writeFileSync(shotPath, image.toPNG())
           if (process.env.WFMC_SHOT_DOM) {
+            // 选择器默认还是老的 .music/.music-toggle；要看别的节点就设 WFMC_SHOT_SEL=".stat-bars,.stat-foot"
+            const sel = JSON.stringify(process.env.WFMC_SHOT_SEL ?? '.music, .music-toggle')
             const dump = await win.webContents.executeJavaScript(
-              `JSON.stringify(Array.from(document.querySelectorAll('.music, .music-toggle')).map((n) => ({ cls: n.className, tag: n.tagName, rect: n.getBoundingClientRect().toJSON(), pos: getComputedStyle(n).position })))`
+              `JSON.stringify(Array.from(document.querySelectorAll(${sel})).map((n) => ({ cls: n.className, tag: n.tagName, text: (n.textContent || '').slice(0, 40), rect: n.getBoundingClientRect().toJSON(), mt: getComputedStyle(n).marginTop, ac: getComputedStyle(n).alignContent })))`
             )
             fs.writeFileSync(process.env.WFMC_SHOT_DOM, String(dump))
           }

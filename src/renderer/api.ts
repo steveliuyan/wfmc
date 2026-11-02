@@ -71,6 +71,14 @@ export interface LanWorld {
   lastSeen: number
 }
 
+export interface ScannedPort {
+  port: number
+  motd?: string
+  version?: string
+  players?: { online: number; max: number }
+  fromJava?: boolean
+}
+
 export interface TunnelState {
   running: boolean
   localPort?: number
@@ -135,6 +143,8 @@ export interface ServerManifest {
   mods: ModRef[]
   at: number
   base?: string
+  /** 房主开了「整包直传」（游戏文件 + 模组 + Java 运行时） */
+  pack?: boolean
 }
 
 export interface EnvDiff {
@@ -221,6 +231,27 @@ export const api = {
     }>('data:shared-info'),
   useSharedData: (on: boolean) =>
     call<{ dir: string; instances: number; accounts: number }>('data:use-shared', on),
+  setDataDir: (dir: string) =>
+    call<{ dir: string; instances: number; accounts: number }>('data:set-dir', dir),
+  /** 找回旧数据：机器上所有存过数据的目录（老名字 / 便携版 / 安装版） */
+  dataDiscover: () =>
+    call<{ dir: string; name: string; instances: number; accounts: number; score: number; active: boolean }[]>(
+      'data:discover'
+    ),
+  dataAdopt: (dir: string) =>
+    call<{ dir: string; instances: number; accounts: number }>('data:adopt', dir),
+  /** 启动时自动接上了旧数据的话，这里返回一条说明（只返回一次） */
+  adoptInfo: () =>
+    call<{ from: string; to: string; accounts: number } | null>('data:adopt-info'),
+  /** 一键清空记录（accounts = 账号列表，playtime = 各实例游玩时长） */
+  clearData: (target: 'accounts' | 'playtime') =>
+    call<{ target: string; cleared: number; detail: string }>('data:clear', target),
+  /** 数据目录占多大（超时会有 partial） */
+  dataSize: () =>
+    call<{ dir: string; bytes: number; files: number; partial: boolean }>('data:size'),
+  /** 数据目录体检：是否落在安装目录里（更新会清空安装目录 → 要红字提示） */
+  dataHealth: () =>
+    call<{ dir: string; installDir: string; insideInstall: boolean }>('data:health'),
 
   pickFile: () => call<string | undefined>('dialog:pick-file'),
   pickFiles: () => call<string[]>('dialog:pick-files'),
@@ -423,7 +454,7 @@ export const api = {
   serverSyncCheck: (instanceId: string, host: string, gamePort: number) =>
     call<EnvDiff>('serversync:check', instanceId, host, gamePort),
   serverSyncApply: (instanceId: string, diff: EnvDiff) =>
-    call<{ added: number; failed: string[] }>('serversync:apply', instanceId, diff),
+    call<{ added: number; failed: string[]; stillMissing?: string[] }>('serversync:apply', instanceId, diff),
   createHostedFromInstance: (instanceId: string, opts: { name?: string; memoryMb?: number; port?: number }) =>
     call<HostedServer>('hosted:create-from-instance', instanceId, opts),
   importServerMods: (id: string, source: { instanceId?: string; packFile?: string }) =>
@@ -440,6 +471,16 @@ export const api = {
   lanIp: () => call<string>('net:lan-ip'),
   /** 本机游戏「对局域网开放」实际用的端口（游戏里自己填的那个，可能不是 25565） */
   myLanPort: () => call<{ instanceId?: string; port?: number; at?: number }>('lan:my-port'),
+  /** 扫本机正在开着的游戏端口（游戏里「对局域网开放」填的那个，不一定 25565） */
+  scanLanPorts: () => call<ScannedPort[]>('lan:scan-ports'),
+  /** 从房主机器整包拷游戏文件 / 模组 / Java 运行时（同一个路由器下最稳） */
+  pullPackFromHost: (instanceId: string, host: string, gamePort: number) =>
+    call<{ ok: boolean; message: string; downloaded: number; skipped: number; failed: string[] }>(
+      'lan:pull-pack',
+      instanceId,
+      host,
+      gamePort
+    ),
   publicEndpoint: () => call<{ ip: string; port: number } | null>('net:public'),
   upnpMap: (port: number) => call<UpnpResult>('net:upnp', port),
   upnpUnmap: (port: number) => call<boolean>('net:unupnp', port),
@@ -575,6 +616,19 @@ export function formatDuration(ms?: number) {
   const minutes = totalMinutes % 60
   if (hours === 0) return `${minutes} 分钟`
   return `${hours} 小时 ${minutes} 分`
+}
+
+/**
+ * 「最近启动」用的紧凑写法。
+ * toLocaleString() 输出「2026/11/1 18:22:11」十好几个字符，在首页右栏里会折行；
+ * 今年内省掉年份，完整时间放在 title 里悬停看。
+ */
+export function formatLastPlayed(when: string | number) {
+  const d = new Date(when)
+  if (Number.isNaN(d.getTime())) return '还没玩过'
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return d.getFullYear() === new Date().getFullYear() ? md : `${d.getFullYear()}-${md}`
 }
 
 /** 把底层网络错误翻成人话，toast 里别甩 fetch failed 这种 */

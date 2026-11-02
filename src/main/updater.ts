@@ -89,6 +89,26 @@ export async function applyUpdate(url: string, onProgress?: ProgressFn): Promise
   if (!ok) throw new Error(`新版本下载失败：${(lastErr as Error)?.message ?? '网络不通'}`)
   onProgress?.({ key: 'update', phase: '准备替换文件', current: 1, total: 1 })
 
+  // 更新前先把「记录」抄一份到安装目录外面：万一安装包把数据清掉，账号/设置还能捞回来
+  try {
+    const dir = path.join(app.getPath('appData'), 'WFMC', 'update-backup')
+    fs.mkdirSync(dir, { recursive: true })
+    for (const f of [store.settingsFile, store.accountsFile]) {
+      if (fs.existsSync(f)) fs.copyFileSync(f, path.join(dir, path.basename(f)))
+    }
+  } catch {
+    /* 备份失败不影响更新 */
+  }
+
+  // 安装版：**下载下来的是安装包，直接运行它**，不要拿安装包去覆盖 WFMC.exe。
+  // （以前是 move /y setup.exe → WFMC.exe 再启动，等于每次都跑一遍安装流程；
+  //   而安装包在「更新」分支里会把整个安装目录挪走再删，数据在安装目录里的用户每次更新都丢数据。）
+  if (!process.env.PORTABLE_EXECUTABLE_FILE) {
+    spawn(tmp, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref()
+    setTimeout(() => app.quit(), 800)
+    return tmp
+  }
+
   const script = path.join(os.tmpdir(), `wfmc-update-${Date.now()}.cmd`)
   const content = [
     '@echo off',

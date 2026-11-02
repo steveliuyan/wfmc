@@ -97,6 +97,7 @@ import {
   stopInstanceManifest,
   syncEnvironment
 } from './serversync'
+import { pullPack } from './lanshare'
 import { logError, readErrors } from './errlog'
 import { exportInstanceAsMrpack, inspectMrpack } from './modpackexport'
 import {
@@ -112,6 +113,7 @@ import {
   upnpMap,
   upnpUnmap
 } from './netshare'
+import { scanMinecraftPorts } from './portscan'
 
 let win: BrowserWindow | undefined
 
@@ -207,6 +209,22 @@ export function registerIpc() {
     const dir = store.setSharedData(on)
     return { dir, instances: store.listInstances().length, accounts: store.accounts.length }
   })
+  // 用户手动挑的数据目录：记一个 dataDirCustom，便携版下次启动就不会再纠回默认
+  ipcMain.handle('data:set-dir', (_e, dir: string) => {
+    const abs = store.setDataDir(dir)
+    return { dir: abs, instances: store.listInstances().length, accounts: store.accounts.length }
+  })
+  // 找回旧数据：把机器上所有存过数据的目录列出来（老名字的、便携版的、安装版的）
+  ipcMain.handle('data:discover', () => store.discoverData())
+  ipcMain.handle('data:adopt', (_e, dir: string) => store.adoptDir(dir))
+  // 启动时自动接上了旧数据 → 首页提示一句，把「数据没丢」讲清楚
+  ipcMain.handle('data:adopt-info', () => store.adoptInfo())
+  // 一键清空记录（账号 / 游玩时长）：只清记录，不动游戏文件
+  ipcMain.handle('data:clear', (_e, target: 'accounts' | 'playtime') => store.clearData(target))
+  // 数据目录占多大（设置/数据面板显示用）
+  ipcMain.handle('data:size', () => store.dataSize())
+  // 数据目录体检：是不是放在了安装目录里（更新会把安装目录清空 → 必须提示）
+  ipcMain.handle('data:health', () => store.dataHealth())
 
   ipcMain.handle('dialog:pick-file', async (_e, filters?: { name: string; extensions: string[] }[]) => {
     const res = await dialog.showOpenDialog({
@@ -255,7 +273,19 @@ export function registerIpc() {
       })
     }
     try {
-      const exe = await installJavaRuntime(component, say)
+      // 也走后台任务：这样右下角任务面板看得见（以前只有进度、没有任务条目）
+      const exe = await runTask('java', `下载 Java 运行时 ${component}`, async (ctx) =>
+        installJavaRuntime(component, say, {
+          signal: ctx.signal,
+          onBytes: (doneBytes, totalBytes) =>
+            ctx.report({
+              phase: '下载 Java 运行时',
+              current: Math.round(doneBytes / 1048576),
+              total: Math.round(totalBytes / 1048576),
+              detail: `${Math.round(doneBytes / 1048576)} / ${Math.round(totalBytes / 1048576)} MB`
+            })
+        })
+      )
       progress({ key: 'java-install', phase: 'Java 运行时装好了', current: 0, total: 0, done: true })
       return exe
     } catch (e) {
@@ -948,6 +978,22 @@ export function registerIpc() {
   })
   // 这个实例现在有没有在共享清单（联机页轮询用，0 = 没共享）
   ipcMain.handle('serversync:instance-port', (_e, instanceId: string) => instanceManifestPort(instanceId) ?? 0)
+  // 从房主机器整包拷「版本文件 + 模组 + Java 运行时」（同一个路由器下最稳的一条路）
+  ipcMain.handle('lan:pull-pack', async (_e, instanceId: string, host: string, gamePort: number) =>
+    await runTask('install', '从房主拷贝游戏文件', async (ctx) => {
+      const found = await discoverManifest(host, gamePort)
+      const base = found?.base ?? `http://${host}:${gamePort + 1}`
+      return await pullPack({
+        baseUrl: base,
+        instanceId,
+        signal: ctx.signal,
+        onProgress: (p) => {
+          progress({ ...p, taskId: ctx.id })
+          ctx.report({ phase: p.phase, current: p.current, total: p.total, detail: p.detail })
+        }
+      })
+    })
+  )
   ipcMain.handle('serversync:check', async (_e, instanceId: string, host: string, gamePort: number) => {
     const found = await discoverManifest(host, gamePort)
     if (!found) return { reachable: false, missing: [], extra: [] }
@@ -1026,6 +1072,15 @@ export function registerIpc() {
   ipcMain.handle('net:lan-ip', () => firstLanIp())
   // 本机游戏「对局域网开放」实际用的端口（launch.ts 从游戏日志里解析）
   ipcMain.handle('lan:my-port', () => myLanPort())
+  // 扫本机正在开着的游戏端口（netstat + java 进程 + MC ping 验证）
+  ipcMain.handle('lan:scan-ports', async () => {
+    try {
+      return await scanMinecraftPorts()
+    } catch (e) {
+      logError('lan:scan-ports', e instanceof Error ? e.message : String(e))
+      return []
+    }
+  })
   ipcMain.handle('net:public', async () => (await publicEndpoint()) ?? null)
   ipcMain.handle('net:upnp', async (_e, port: number) => await upnpMap(port))
   ipcMain.handle('net:unupnp', async (_e, port: number) => {
