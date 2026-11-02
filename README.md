@@ -138,6 +138,7 @@ STUN：公网端点 223.160.224.211:44031（本机内网 192.168.0.241）
 首页数据面板(1.0.35)：1 实例 1280×820 → 卡片与日志卡等高 345px；tiles 387–438 / bars 456–472(align-content:start) / 本机 488–627 / 底行 637–663
 数据清理(1.0.35)：data:clear('accounts') → accounts.json 变空且 .bak 留下原内容；data:clear('playtime') → playTimeMs=0、lastPlayed 消失
 账号快切(1.0.35)：点侧边栏账号条 → 弹层 207×191 贴在条上方，2 个账号，当前项高亮
+设置页(1.0.35)：`.settings-shell` 左 rail 定宽 + 右侧卡片流；滚动时 IntersectionObserver 切换 `.settings-rail button.on`；浅色/深色各分区逐页截图无重叠、无白块（深色数字框 spinner 已隐藏）
 
 ## 6. 踩坑记录（都已在代码里处理）
 
