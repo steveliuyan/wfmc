@@ -168,7 +168,7 @@ export interface TaskInfo {
   id: string
   kind: string
   title: string
-  status: 'running' | 'done' | 'error' | 'canceled'
+  status: 'running' | 'paused' | 'done' | 'error' | 'canceled'
   phase?: string
   current?: number
   total?: number
@@ -560,6 +560,8 @@ export const api = {
   // ---- 任务队列 ----
   listTasks: () => call<TaskInfo[]>('tasks:list'),
   cancelTask: (id: string) => call<boolean>('tasks:cancel', id),
+  pauseTask: (id: string) => call<boolean>('tasks:pause', id),
+  resumeTask: (id: string) => call<boolean>('tasks:resume', id),
   clearTasks: () => call<TaskInfo[]>('tasks:clear'),
   onTask: (cb: (t: TaskInfo) => void) => bridge.on('event:task', cb),
 

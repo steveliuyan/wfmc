@@ -37,7 +37,8 @@ export async function installMrpackFile(
   mrpackPath: string,
   displayName?: string,
   onProgress?: ProgressFn,
-  meta?: { projectId?: string; versionId?: string; versionNumber?: string; url?: string }
+  meta?: { projectId?: string; versionId?: string; versionNumber?: string; url?: string },
+  signal?: AbortSignal
 ): Promise<string> {
   const indexBuf = readFileInsideZip(mrpackPath, 'modrinth.index.json')
   if (!indexBuf) throw new Error('不是有效的 Modrinth 整合包（缺少 modrinth.index.json）')
@@ -53,7 +54,7 @@ export async function installMrpackFile(
     loaderVersion
   })
 
-  await installInstanceGame(instance, onProgress)
+  await installInstanceGame(instance, onProgress, { signal })
 
   const gameDir = store.instanceGameDir(instance.id)
   const key = `modpack-${instance.id}`
@@ -61,7 +62,8 @@ export async function installMrpackFile(
   const errors = await downloadAll(
     index.files.map((f) => ({ url: f.downloads, dest: path.join(gameDir, f.path), skipIfExists: true })),
     6,
-    (done, total) => onProgress?.({ key, phase: '下载整合包文件', current: done, total })
+    (done, total) => onProgress?.({ key, phase: '下载整合包文件', current: done, total }),
+    signal
   )
 
   onProgress?.({ key, phase: '解压 overrides', current: 0, total: 1 })
@@ -89,13 +91,14 @@ export async function installMrpackFile(
 export async function installMrpackFromUrl(
   url: string,
   displayName: string,
-  onProgress?: ProgressFn
+  onProgress?: ProgressFn,
+  signal?: AbortSignal
 ): Promise<string> {
   const tmp = path.join(store.dataDir, 'temp', `pack-${Date.now()}.mrpack`)
   onProgress?.({ key: 'modpack-download', phase: '下载整合包', current: 0, total: 1 })
-  await downloadFile(url, tmp, undefined, { skipIfExists: false })
+  await downloadFile(url, tmp, undefined, { skipIfExists: false, signal })
   try {
-    return await installMrpackFile(tmp, displayName, onProgress)
+    return await installMrpackFile(tmp, displayName, onProgress, undefined, signal)
   } finally {
     fs.rmSync(tmp, { force: true })
   }
@@ -117,7 +120,8 @@ interface CurseManifest {
 export async function installCurseforgeZip(
   zipPath: string,
   displayName?: string,
-  onProgress?: ProgressFn
+  onProgress?: ProgressFn,
+  signal?: AbortSignal
 ): Promise<string> {
   const manifestBuf = readFileInsideZip(zipPath, 'manifest.json')
   if (!manifestBuf) throw new Error('不是有效的 CurseForge 整合包（缺少 manifest.json）')
@@ -149,7 +153,7 @@ export async function installCurseforgeZip(
     loader,
     loaderVersion
   })
-  await installInstanceGame(instance, onProgress)
+  await installInstanceGame(instance, onProgress, { signal })
 
   const apiKey = store.settings.curseforgeApiKey.trim()
   const gameDir = store.instanceGameDir(instance.id)
@@ -176,7 +180,7 @@ export async function installCurseforgeZip(
       done += chunk.length
       onProgress?.({ key, phase: '解析 CurseForge 文件', current: done, total: ids.length })
     }
-    await downloadAll(files, 6, (d, t) => onProgress?.({ key, phase: '下载模组', current: d, total: t }))
+    await downloadAll(files, 6, (d, t) => onProgress?.({ key, phase: '下载模组', current: d, total: t }), signal)
   } else {
     onProgress?.({
       key,

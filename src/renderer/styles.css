@@ -833,8 +833,25 @@ label.full {
 .progress-label {
   display: flex;
   justify-content: space-between;
+  gap: 10px;
   font-size: 12px;
   margin-bottom: 6px;
+}
+
+/* 右侧「已下载/总量 百分比」：数字等宽，滚动时不会左右抖 */
+.progress-nums {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-nums b {
+  font-weight: 600;
+  color: var(--text-2);
+  min-width: 34px;
+  text-align: right;
 }
 
 .bar {
@@ -872,6 +889,17 @@ label.full {
 @keyframes shimmer {
   from { transform: translateX(-100%); }
   to { transform: translateX(100%); }
+}
+
+/* 暂停中的进度条：压成灰的、停掉流光 —— 一眼能看出"这不是在跑，是停住了" */
+.bar.paused i {
+  background: var(--muted);
+  opacity: 0.55;
+}
+
+.bar.paused i::after {
+  animation: none;
+  opacity: 0;
 }
 
 /* ============ 日志 ============ */
@@ -3340,6 +3368,8 @@ textarea:focus {
 .progress-fold > div {
   overflow: hidden;
   min-height: 0;
+  /* 折叠容器要裁切才能做 0fr→1fr 动画，但裁切框不带圆角就会把卡片下沿的圆角和阴影切平（用户报的「下面两个角是方的」） */
+  border-radius: var(--radius);
 }
 .progress-fold.open {
   grid-template-rows: 1fr;

@@ -404,7 +404,10 @@ export default function Download({ goto }: { goto: (p: 'instances') => void }) {
               <div className="progress-row" key={i}>
                 <div className="progress-label">
                   <span>{p.phase}</span>
-                  <span className="muted">{pct}%</span>
+                  <span className="progress-nums muted">
+                    {p.current ?? 0}/{p.total ?? 0}
+                    <b>{pct}%</b>
+                  </span>
                 </div>
                 <div className="bar">
                   <i style={{ width: `${pct}%` }} />

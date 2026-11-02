@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { waitIfPaused } from './pause'
 import { resolveJava } from '@xmcl/installer'
 import type { JavaInfo } from '../shared/types'
 import { store } from './store'
@@ -342,6 +343,8 @@ export async function installJavaRuntime(
           const raw = f.downloads?.raw
           if (!raw) continue
           if (opts?.signal?.aborted) throw new AbortError('Java 下载已取消')
+          // 暂停就停在两个文件之间：已下好的文件下一轮直接跳过，不重下
+          await waitIfPaused(opts?.signal)
           const target = path.join(dest, rel.replace(/[\\/]+/g, path.sep))
           const size = raw.size ?? 0
           // 已下好的文件跳过——但要连 sha1 一起验：只比大小会把上次断流的坏文件永久跳过

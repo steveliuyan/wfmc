@@ -29,6 +29,10 @@ Thumbs.db
 
 # 本地调试截图/临时用户目录/发布日志（均为自检用，不入仓库）
 .shot-*.png
+.shots/
+.tmp-shot/
+.shot-userdata/
+.crop-*.png
 .tmp-ud/
 .tmp-cfpa/
 .pub-*.log

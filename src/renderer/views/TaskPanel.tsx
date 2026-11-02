@@ -70,8 +70,10 @@ export default function TaskPanel() {
     dragRef.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, dragging: true }
   }
 
-  const running = tasks.filter((t) => t.status === 'running')
-  const finished = tasks.filter((t) => t.status !== 'running')
+  // 暂停的也算"没跑完"：它还占着一条任务，不能混进已完成里被清掉
+  const running = tasks.filter((t) => t.status === 'running' || t.status === 'paused')
+  const paused = tasks.filter((t) => t.status === 'paused')
+  const finished = tasks.filter((t) => t.status !== 'running' && t.status !== 'paused')
   if (tasks.length === 0) return null
 
   const style: React.CSSProperties = pos
@@ -84,7 +86,12 @@ export default function TaskPanel() {
         <span className="task-grip" aria-hidden>
           ⠿
         </span>
-        <span className="ellipsis">后台任务 {running.length > 0 ? `· ${running.length} 个进行中` : '· 空闲'}</span>
+        <span className="ellipsis">
+          后台任务{' '}
+          {running.length > 0
+            ? `· ${running.length} 个进行中${paused.length ? `（${paused.length} 个已暂停）` : ''}`
+            : '· 空闲'}
+        </span>
         <span className="row">
           <button
             className="btn sm ghost"
@@ -131,17 +138,40 @@ export default function TaskPanel() {
                     {task.title}
                   </span>
                   {task.status === 'running' && (
-                    <button className="btn sm danger" onClick={() => api.cancelTask(task.id)}>
-                      取消
-                    </button>
+                    <>
+                      <button
+                        className="btn sm ghost"
+                        title="停在这儿，已经下完的文件不会重下"
+                        onClick={() => api.pauseTask(task.id)}
+                      >
+                        暂停
+                      </button>
+                      <button className="btn sm danger" onClick={() => api.cancelTask(task.id)}>
+                        取消
+                      </button>
+                    </>
+                  )}
+                  {task.status === 'paused' && (
+                    <>
+                      <button className="btn sm" onClick={() => api.resumeTask(task.id)}>
+                        继续
+                      </button>
+                      <button className="btn sm danger" onClick={() => api.cancelTask(task.id)}>
+                        取消
+                      </button>
+                    </>
                   )}
                   {task.status === 'done' && <span className="badge ok">完成</span>}
                   {task.status === 'error' && <span className="badge warn">失败</span>}
                   {task.status === 'canceled' && <span className="badge">已取消</span>}
                 </div>
-                <div className="task-sub muted small">{task.phase ?? task.error ?? ''}</div>
-                {task.status === 'running' && (
-                  <div className="bar" style={{ height: 6 }}>
+                <div className="task-sub muted small">
+                  {task.status === 'paused'
+                    ? `已暂停 · 点「继续」接着跑${task.phase ? `（${task.phase}）` : ''}`
+                    : task.phase ?? task.error ?? ''}
+                </div>
+                {(task.status === 'running' || task.status === 'paused') && (
+                  <div className={`bar ${task.status === 'paused' ? 'paused' : ''}`} style={{ height: 6 }}>
                     <i style={{ width: `${pct}%` }} />
                   </div>
                 )}

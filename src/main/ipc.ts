@@ -78,7 +78,7 @@ import { applyModUpdate, checkModUpdates } from './modupdates'
 import { ensureInjector, loginThirdParty, refreshThirdParty, listProfiles, selectProfile, lookupSkin, uploadSkin, uploadCape, clearTexture, parseInjectorCard } from './authlib'
 import { decodeRoomCode, encodeRoomCode } from './rooms'
 import { applyPerfPreset, deleteScreenshot, listScreenshots, PERF_PRESETS, screenshotsDir } from './shots'
-import { cancelTask, clearFinishedTasks, listTasks, runTask, setTaskEmitter } from './tasks'
+import { cancelTask, clearFinishedTasks, listTasks, pauseTask, resumeTask, runTask, setTaskEmitter } from './tasks'
 import { applyUpdate, checkReleases, checkUpdate, pickAsset } from './updater'
 import { diagnoseMods } from './moddoctor'
 import { fixMissingDeps } from './moddeps'
@@ -548,17 +548,22 @@ export function registerIpc() {
         progress({ ...p, taskId: ctx.id })
         ctx.report({ phase: p.phase, current: p.current, total: p.total })
       }
-      if (ext === '.mrpack') return await installMrpackFile(filePath, name, onProgress)
-      if (ext === '.zip') return await installCurseforgeZip(filePath, name, onProgress)
+      if (ext === '.mrpack') return await installMrpackFile(filePath, name, onProgress, undefined, ctx.signal)
+      if (ext === '.zip') return await installCurseforgeZip(filePath, name, onProgress, ctx.signal)
       throw new Error('只支持 .mrpack 或 .zip 整合包')
     })
   })
   ipcMain.handle('modpack:install-url', async (_e, url: string, name: string) =>
     await runTask('modpack', `安装整合包 ${name}`, async (ctx) =>
-      installMrpackFromUrl(url, name, (p) => {
-        progress({ ...p, taskId: ctx.id })
-        ctx.report({ phase: p.phase, current: p.current, total: p.total })
-      })
+      installMrpackFromUrl(
+        url,
+        name,
+        (p) => {
+          progress({ ...p, taskId: ctx.id })
+          ctx.report({ phase: p.phase, current: p.current, total: p.total })
+        },
+        ctx.signal
+      )
     )
   )
 
@@ -566,6 +571,8 @@ export function registerIpc() {
   setTaskEmitter((task) => emit('event:task', task))
   ipcMain.handle('tasks:list', () => listTasks())
   ipcMain.handle('tasks:cancel', (_e, id: string) => cancelTask(id))
+  ipcMain.handle('tasks:pause', (_e, id: string) => pauseTask(id))
+  ipcMain.handle('tasks:resume', (_e, id: string) => resumeTask(id))
   ipcMain.handle('tasks:clear', () => clearFinishedTasks())
 
   // ---------- 错误日志 ----------

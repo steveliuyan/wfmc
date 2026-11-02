@@ -63,7 +63,7 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
   // 每个局域网世界背后的环境（房主开了 WFMC 的模组清单才探得到）；at=上次探测时间，用来允许重探
   const [probes, setProbes] = useState<Record<string, { ok: boolean; manifest?: ServerManifest; at: number }>>({})
 
-  const installing = tasks.find((x) => x.kind === 'install' && x.status === 'running')
+  const installing = tasks.find((x) => x.kind === 'install' && (x.status === 'running' || x.status === 'paused'))
   const myWorld = useMemo(() => lanWorlds.find((w) => !!lanIp && w.address === lanIp), [lanWorlds, lanIp])
 
   useEffect(() => {

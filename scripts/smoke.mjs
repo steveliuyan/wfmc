@@ -16,6 +16,19 @@ const { install, installVersion, installLibraries, getVersionList, getLoaderArti
 const root = path.join(os.tmpdir(), 'zhudong-smoke')
 fs.mkdirSync(root, { recursive: true })
 
+// 与 app 内一致：默认走 BMCLAPI 镜像（libraries.minecraft.net 在国内常年超时，
+// 而 repo1.maven.org 上根本没有 launchwrapper 这类旧库），WFMC_SMOKE_MIRROR=0 可关掉直连官方源。
+const useMirror = process.env.WFMC_SMOKE_MIRROR !== '0'
+const MIRROR = {
+  mavenHost: 'https://bmclapi2.bangbang93.com/maven',
+  assetsHost: 'https://bmclapi2.bangbang93.com/assets',
+  json: (v) => `https://bmclapi2.bangbang93.com/version/${v.id}/json`,
+  client: (v) => `https://bmclapi2.bangbang93.com/version/${v.id}/client`
+}
+const installOpt = useMirror ? MIRROR : {}
+const libOpt = useMirror ? { mavenHost: MIRROR.mavenHost } : {}
+console.log(useMirror ? '下载源：BMCLAPI 镜像' : '下载源：官方原站')
+
 function ok(msg) {
   console.log(`  [OK] ${msg}`)
 }
@@ -31,7 +44,7 @@ step('2. 安装老版本 1.0（完整：json + jar + libraries + assets）')
 const small = list.versions.find((v) => v.id === '1.0')
 if (!small) throw new Error('没找到 1.0')
 const t0 = Date.now()
-const resolvedOld = await install(small, root)
+const resolvedOld = await install(small, root, installOpt)
 ok(`1.0 安装完成，用时 ${((Date.now() - t0) / 1000).toFixed(1)}s`)
 ok(`mainClass = ${resolvedOld.mainClass}`)
 ok(`libraries = ${resolvedOld.libraries.length} 个`)
@@ -40,8 +53,8 @@ ok(`assets = ${resolvedOld.assets}`)
 step('3. 只装新版本 1.20.1 的 json+jar+libraries（跳过全量 assets）')
 const modern = list.versions.find((v) => v.id === '1.20.1')
 if (!modern) throw new Error('没找到 1.20.1')
-const v1201 = await installVersion(modern, root)
-await installLibraries(v1201)
+const v1201 = await installVersion(modern, root, installOpt)
+await installLibraries(v1201, libOpt)
 ok(`1.20.1 版本文件就绪，libraries = ${v1201.libraries.length} 个，assets 索引 = ${v1201.assetIndex?.id}`)
 
 step('4. 解析版本并生成 JVM / 游戏启动参数')
@@ -64,7 +77,12 @@ ok(`包含 mainClass: ${args.includes(parsed.mainClass)}`)
 ok(`包含 -Xmx: ${args.some((a) => a.startsWith('-Xmx'))}`)
 
 step('5. Fabric 加载器：拉取版本并写入版本 json')
-const artifacts = await getLoaderArtifactListFor('1.20.1')
+// meta.fabricmc.net 在部分网络下不可达，app 内走的是 BMCLAPI 的 fabric-meta 转存；
+// 这里同样直取镜像（@xmcl 的 getLoaderArtifactListFor 只认 dispatcher、无法改 host）。
+const fabricMetaUrl = useMirror
+  ? 'https://bmclapi2.bangbang93.com/fabric-meta/v2/versions/loader/1.20.1'
+  : 'https://meta.fabricmc.net/v2/versions/loader/1.20.1'
+const artifacts = await (await fetch(fabricMetaUrl)).json()
 ok(`1.20.1 可用 Fabric loader ${artifacts.length} 个，最新 = ${artifacts[0]?.loader.version}`)
 const versionId = await installFabric(artifacts[0], root, { versionId: `fabric-test-1.20.1` })
 const fabricParsed = await Version.parse(root, versionId)

@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { waitIfPaused } from './pause'
 
 export const BmclApi = {
   versionManifest: 'https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json',
@@ -142,6 +143,7 @@ async function singleStream(
     const reader = res.body.getReader()
     for (;;) {
       checkAbort(signal)
+      await waitIfPaused(signal, () => guard.kick())
       const read = await reader.read().catch((e) => {
         if (guard.stalled()) throw new StallError()
         throw e
@@ -207,6 +209,7 @@ async function chunkedDownload(
           let pos = start
           for (;;) {
             checkAbort(signal)
+            await waitIfPaused(signal, () => guard.kick())
             const read = await reader.read().catch((e) => {
               if (guard.stalled()) throw new StallError()
               throw e
@@ -250,6 +253,7 @@ export async function downloadFile(
 ): Promise<void> {
   await fs.promises.mkdir(path.dirname(dest), { recursive: true })
   checkAbort(opts.signal)
+  await waitIfPaused(opts.signal)
 
   if (opts.skipIfExists !== false) {
     const stat = await fs.promises.stat(dest).catch(() => undefined)
@@ -308,6 +312,8 @@ export async function downloadAll(
   const errors: string[] = []
   const workers = new Array(Math.min(concurrency, items.length || 1)).fill(0).map(async () => {
     for (;;) {
+      if (signal?.aborted) return
+      await waitIfPaused(signal)
       if (signal?.aborted) return
       const i = index++
       if (i >= items.length) return
