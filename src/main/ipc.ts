@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import type { ContentKind, Instance, ProgressPayload, Settings } from '../shared/types'
+import { cleanCategory, dataUsage } from './diskusage'
+import { searchLocal } from './search'
 import { store } from './store'
 import { MultiDownloader, registerDownloader, unregisterDownloader, pauseDownload, resumeDownload, cancelDownload, downloaderState } from './fastdl'
 import { friendlyJavaError, scanJava, installJavaRuntime, requiredJavaMajor } from './java'
@@ -29,7 +31,10 @@ import {
   importInstanceZip,
   listContent,
   listCrashReports,
+  listSaveBackups,
+  pruneSaveBackups,
   readCrashReport,
+  restoreSaveBackup,
   toggleContent
 } from './content'
 import { exportDiagnostics, moveResourcePack, readResourcePackOrder, toggleResourcePack } from './content'
@@ -79,7 +84,7 @@ import { ensureInjector, loginThirdParty, refreshThirdParty, listProfiles, selec
 import { decodeRoomCode, encodeRoomCode } from './rooms'
 import { applyPerfPreset, deleteScreenshot, listScreenshots, PERF_PRESETS, screenshotsDir } from './shots'
 import { cancelTask, clearFinishedTasks, listTasks, pauseTask, resumeTask, runTask, setTaskEmitter } from './tasks'
-import { applyUpdate, checkReleases, checkUpdate, pickAsset } from './updater'
+import { applyBestUpdate, applyUpdate, checkReleases, checkUpdate, pickAsset } from './updater'
 import { diagnoseMods } from './moddoctor'
 import { fixMissingDeps } from './moddeps'
 import { installLangPacks, inspectLangPack, readPackContents, removeLangPacks, removePack } from './langpack'
@@ -233,7 +238,9 @@ export function registerIpc() {
     )
   )
   // 数据目录占多大（设置/数据面板显示用）
-  ipcMain.handle('data:size', () => store.dataSize())
+  ipcMain.handle('data:usage', () => dataUsage(store.dataDir))
+ipcMain.handle('data:clean-usage', (_e, key: 'downloads' | 'cache' | 'logs') => cleanCategory(store.dataDir, key))
+ipcMain.handle('data:size', () => store.dataSize())
   // 数据目录体检：是不是放在了安装目录里（更新会把安装目录清空 → 必须提示）
   ipcMain.handle('data:health', () => store.dataHealth())
 
@@ -315,6 +322,8 @@ export function registerIpc() {
 
   // ---------- 实例 ----------
   ipcMain.handle('instance:list', () => store.listInstances())
+  // Ctrl+K：实例 / 当前实例的模组·资源包·光影·存档 / 收藏的服务器（只读目录，不解析 jar）
+  ipcMain.handle('search:all', (_e, query: string, instanceId?: string) => searchLocal(query, instanceId))
   ipcMain.handle('instance:detail', (_e, id: string) => instanceDetail(id))
   ipcMain.handle('instance:create', (_e, input: Parameters<typeof createInstance>[0]) => createInstance(input))
   ipcMain.handle('instance:update', (_e, id: string, patch: Partial<Instance>) => updateInstance(id, patch))
@@ -374,6 +383,9 @@ export function registerIpc() {
     await shell.openPath(contentDir(instanceId, kind))
   })
   ipcMain.handle('saves:backup', (_e, instanceId: string) => backupSaves(instanceId))
+  ipcMain.handle('saves:backups', (_e, instanceId: string) => listSaveBackups(instanceId))
+  ipcMain.handle('saves:restore-backup', (_e, instanceId: string, file: string) => restoreSaveBackup(instanceId, file))
+  ipcMain.handle('saves:prune-backups', (_e, instanceId: string, keep?: number) => pruneSaveBackups(instanceId, keep))
   ipcMain.handle('crash:list', (_e, instanceId: string) => listCrashReports(instanceId))
   ipcMain.handle('crash:read', (_e, instanceId: string, target: string) => readCrashReport(instanceId, target))
   ipcMain.handle('crash:diagnose', (_e, instanceId: string) => analyzeLatest(instanceId))
@@ -414,7 +426,7 @@ export function registerIpc() {
           progress({ ...p, taskId: ctx.id })
           ctx.report({ phase: p.phase, current: p.current, total: p.total })
         },
-        { signal: ctx.signal }
+        { signal: ctx.signal, spawn: ctx.spawn }
       )
     )
   })
@@ -559,8 +571,8 @@ export function registerIpc() {
         progress({ ...p, taskId: ctx.id })
         ctx.report({ phase: p.phase, current: p.current, total: p.total })
       }
-      if (ext === '.mrpack') return await installMrpackFile(filePath, name, onProgress, undefined, ctx.signal)
-      if (ext === '.zip') return await installCurseforgeZip(filePath, name, onProgress, ctx.signal)
+      if (ext === '.mrpack') return await installMrpackFile(filePath, name, onProgress, undefined, ctx.signal, ctx.spawn)
+      if (ext === '.zip') return await installCurseforgeZip(filePath, name, onProgress, ctx.signal, ctx.spawn)
       throw new Error('只支持 .mrpack 或 .zip 整合包')
     })
   })
@@ -573,7 +585,8 @@ export function registerIpc() {
           progress({ ...p, taskId: ctx.id })
           ctx.report({ phase: p.phase, current: p.current, total: p.total })
         },
-        ctx.signal
+        ctx.signal,
+        ctx.spawn
       )
     )
   )
@@ -736,7 +749,7 @@ export function registerIpc() {
     const meter = { bytes: 0, last: Date.now(), at: 0, speed: 0 }
     const fmtSpeed = () => (meter.speed / 1024 / 1024).toFixed(2) + ' MB/s'
     const dl = new MultiDownloader({
-      threads: store.settings.downloadThreads ?? 48,
+      threads: store.settings.downloadThreads ?? 32,
       chunks: 8,
       onBytes: (d: number) => {
         meter.bytes += d
@@ -761,7 +774,9 @@ export function registerIpc() {
               key,
               phase: '已暂停 ' + name + '（' + (dl.downloaded / 1024 / 1024).toFixed(1) + ' MB）',
               current: dl.downloaded,
-              total: fileSize || dl.downloaded || 1
+              total: fileSize || dl.downloaded || 1,
+              bytes: dl.downloaded,
+              totalBytes: fileSize || undefined
             })
             return
           }
@@ -777,7 +792,9 @@ export function registerIpc() {
               fmtSpeed() +
               '）',
             current: dl.downloaded,
-            total: fileSize || dl.downloaded || 1
+            total: fileSize || dl.downloaded || 1,
+            bytes: dl.downloaded,
+            totalBytes: fileSize || undefined
           })
         }, 500)
         const errs = await dl.downloadAll(
@@ -850,9 +867,8 @@ export function registerIpc() {
   ipcMain.handle('update:releases', async () => await checkReleases())
   ipcMain.handle('update:apply-asset', async (_e, url: string) => await applyUpdate(url, progress))
   ipcMain.handle('update:apply-release', async (_e, release: Parameters<typeof pickAsset>[0]) => {
-    const asset = pickAsset(release)
-    if (!asset) throw new Error('这个版本没有可下载的安装包')
-    return await applyUpdate(asset.url, progress)
+    // 优先增量补丁（只下变化的部分），没有补丁或补丁应用失败会自动回落整包
+    return await applyBestUpdate(release, progress)
   })
   ipcMain.handle('update:apply', async (_e, url: string) => await applyUpdate(url, progress))
   ipcMain.handle('app:version', () => app.getVersion())

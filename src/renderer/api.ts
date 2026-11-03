@@ -1,4 +1,6 @@
 import type {
+  RestoreBackupResult,
+  SaveBackup,
   Account,
   ContentItem,
   ContentKind,
@@ -22,6 +24,8 @@ import type {
   WorldPackResult,
   WorldRestoreResult
 } from '../shared/types'
+import type { CleanResult, DiskUsage, SearchHit } from '../shared/types'
+export type { SearchHit }
 
 const bridge = (
   window as unknown as {
@@ -117,6 +121,15 @@ export interface ReleaseCheck {
   history: ReleaseInfo[]
   source: 'github' | 'json' | 'none'
   error?: string
+  /** 有可用增量补丁时带上，界面可以提示"这次只下 X MB" */
+  delta?: { kind: 'portable' | 'asar'; size: number; url: string; from: string; to: string }
+}
+
+export interface UpdateResult {
+  path: string
+  via: 'delta' | 'full'
+  deltaBytes?: number
+  savedBytes?: number
 }
 
 export interface AccountHealth {
@@ -172,9 +185,15 @@ export interface TaskInfo {
   phase?: string
   current?: number
   total?: number
+  detail?: string
   error?: string
   createdAt: number
   finishedAt?: number
+  /** 父任务 id：有值说明这是子任务（任务树） */
+  parentId?: string
+  /** 父任务用：子任务总数 / 已完成数 */
+  childTotal?: number
+  childDone?: number
 }
 
 export interface UpdateInfo {
@@ -255,6 +274,10 @@ export const api = {
       'data:migrate',
       fromDir
     ),  /** 数据目录占多大（超时会有 partial） */
+  /** Ctrl+K 全局搜索：实例 / 当前实例内容 / 收藏的服务器（本地索引，主进程读目录） */
+  searchAll: (query: string, instanceId?: string) => call<SearchHit[]>('search:all', query, instanceId),
+  dataUsage: () => call<DiskUsage>('data:usage'),
+  cleanUsage: (key: 'downloads' | 'cache' | 'logs') => call<CleanResult>('data:clean-usage', key),
   dataSize: () =>
     call<{ dir: string; bytes: number; files: number; partial: boolean }>('data:size'),
   /** 数据目录体检：是否落在安装目录里（更新会清空安装目录 → 要红字提示） */
@@ -331,6 +354,9 @@ export const api = {
     call<ContentItem[] | undefined>('content:import', instanceId, kind),
   openContentDir: (instanceId: string, kind: ContentKind) => call<void>('content:open', instanceId, kind),
   backupSaves: (instanceId: string) => call<string | undefined>('saves:backup', instanceId),
+  saveBackups: (instanceId: string) => call<SaveBackup[]>('saves:backups', instanceId),
+  restoreSaveBackup: (instanceId: string, file: string) =>
+    call<RestoreBackupResult>('saves:restore-backup', instanceId, file),
   crashReports: (instanceId: string) => call<CrashReport[]>('crash:list', instanceId),
   readCrashReport: (instanceId: string, target: string) => call<string>('crash:read', instanceId, target),
   diagnose: (instanceId: string) => call<CrashDiagnosis | undefined>('crash:diagnose', instanceId),
@@ -583,7 +609,7 @@ export const api = {
   checkUpdate: () => call<UpdateInfo>('update:check'),
   checkReleases: () => call<ReleaseCheck>('update:releases'),
   applyReleaseAsset: (url: string) => call<string>('update:apply-asset', url),
-  applyRelease: (release: ReleaseInfo) => call<string>('update:apply-release', release),
+  applyRelease: (release: ReleaseInfo) => call<UpdateResult>('update:apply-release', release),
   applyUpdate: (url: string) => call<string>('update:apply', url),
 
   // ---- Mod 体检 / 整合包导出 ----
@@ -607,6 +633,23 @@ export const api = {
   onLaunchState: (cb: (p: LaunchStatePayload) => void) => bridge.on('event:launch-state', cb)
 }
 
+/** 版本清单里的 type 翻成人话（愚人节版本在清单里也算 snapshot，只能靠 id 认） */
+export function versionTypeLabel(v: { type: string; aprilFools?: boolean }): string {
+  if (v.aprilFools) return '愚人节'
+  switch (v.type) {
+    case 'release':
+      return '正式版'
+    case 'snapshot':
+      return '快照'
+    case 'old_beta':
+      return '远古 Beta'
+    case 'old_alpha':
+      return '远古 Alpha'
+    default:
+      return v.type
+  }
+}
+
 export function formatSize(bytes: number) {
   if (!bytes) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -618,6 +661,32 @@ export function formatSize(bytes: number) {
   }
   return `${n.toFixed(n >= 100 ? 0 : 1)} ${units[i]}`
 }
+
+/** 进度百分比：带字节数就按字节算（大文件下载不会 0% 卡到 100%），否则按文件个数 */
+export function progressPercent(p: {
+  current?: number
+  total?: number
+  bytes?: number
+  totalBytes?: number
+}): number {
+  if (p.totalBytes && p.totalBytes > 0 && typeof p.bytes === 'number') {
+    return Math.max(0, Math.min(100, Math.round((p.bytes / p.totalBytes) * 100)))
+  }
+  if (!p.total) return 0
+  return Math.max(0, Math.min(100, Math.round(((p.current ?? 0) / p.total) * 100)))
+}
+
+/** 进度条右边的数字：字节 / 字节 或 个数 / 个数 */
+export function progressText(p: {
+  current?: number
+  total?: number
+  bytes?: number
+  totalBytes?: number
+}): string {
+  if (p.totalBytes && p.totalBytes > 0) return `${formatSize(p.bytes ?? 0)} / ${formatSize(p.totalBytes)}`
+  return `${p.current ?? 0}/${p.total ?? 0}`
+}
+
 
 export function formatDuration(ms?: number) {
   if (!ms || ms < 1000) return '还没玩过'

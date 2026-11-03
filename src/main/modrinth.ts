@@ -68,7 +68,7 @@ export async function searchResources(
     categories: h.categories,
     versions: h.versions,
     projectType: h.project_type,
-    pageUrl: h.page_url
+    pageUrl: h.page_url || `https://modrinth.com/${h.project_type}/${h.slug}`,
   })
 
   const merged: ResourceHit[] = []

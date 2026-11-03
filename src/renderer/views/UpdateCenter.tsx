@@ -187,8 +187,15 @@ export default function UpdateCenter() {
   const install = async (rel: ReleaseInfo) => {
     setBusy('install')
     try {
-      await api.applyRelease(rel)
-      toast('开始下载新版本，完成后会自动替换并重启', 'success')
+      const res = await api.applyRelease(rel)
+      if (res?.via === 'delta') {
+        toast(
+          `增量更新：只下了 ${fmtSize(res.deltaBytes ?? 0)}（省下 ${fmtSize(res.savedBytes ?? 0)}），完成后自动替换并重启`,
+          'success'
+        )
+      } else {
+        toast('开始下载新版本，完成后会自动替换并重启', 'success')
+      }
     } catch (e) {
       toast(`更新失败：${friendlyError(e)}`, 'error')
     } finally {
@@ -244,11 +251,20 @@ export default function UpdateCenter() {
               {latest.publishedAt && <span>{fmtDate(latest.publishedAt)}</span>}
               {latest.assets.length > 0 && <span>{latest.assets.length} {t('个安装包', 'assets')}</span>}
               {latest.prerelease && <span className="upd-pre">pre-release</span>}
+              {data?.delta && (
+                <span className="upd-delta" title={t('只下载与当前版本的差异部分', 'Only the diff against your build')}>
+                  {t('增量更新仅需', 'delta only')} {fmtSize(data.delta.size)}
+                </span>
+              )}
             </div>
           </div>
           <div className="upd-hero-actions">
             <button className="btn primary" disabled={busy !== ''} onClick={() => install(latest)}>
-              {busy === 'install' ? t('准备下载…', 'Preparing…') : t('下载并安装', 'Download & install')}
+              {busy === 'install'
+                ? t('准备下载…', 'Preparing…')
+                : data?.delta
+                  ? `${t('增量更新', 'Delta update')} · ${fmtSize(data.delta.size)}`
+                  : t('下载并安装', 'Download & install')}
             </button>
             <button className="btn sm ghost" onClick={() => setOpenHistory((v) => !v)}>
               {openHistory ? t('收起历史更新', 'Hide history') : t('历史更新', 'Update history')}

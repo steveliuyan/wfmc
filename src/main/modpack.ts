@@ -1,14 +1,47 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { LoaderType, ProgressFn } from '../shared/types'
-import { downloadAll, downloadFile, fetchJson } from './net'
+import { AbortError, fetchJson } from './net'
+import { MultiDownloader, registerDownloader, unregisterDownloader } from './fastdl'
 import { store } from './store'
 import { installInstanceGame } from './minecraft'
+import type { SpawnFn } from './game'
 import { createInstance } from './instances'
 import { extractZipPrefixes, readFileInsideZip } from './zip'
 import { ModrinthV2Client } from '@xmcl/modrinth'
 
 const client = new ModrinthV2Client()
+
+/**
+ * 整合包里的文件（模组、资源包…）统一走下载引擎：
+ * 多个下载源自动换、多连接并发、断点续传、失效连接自动重连。
+ * 老实现是 net.ts 的 downloadAll（每个文件一条串行连接），模组一多就慢得离谱。
+ */
+async function downloadPackFiles(
+  key: string,
+  items: { urls: string[]; dest: string }[],
+  phase: string,
+  onProgress?: ProgressFn,
+  signal?: AbortSignal
+): Promise<string[]> {
+  if (items.length === 0) return []
+  const dl = new MultiDownloader({ threads: store.settings.downloadThreads ?? 32, chunks: 8, signal })
+  registerDownloader(key, dl)
+  const onAbort = () => dl.cancel()
+  if (signal) {
+    if (signal.aborted) dl.cancel()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
+  try {
+    return await dl.downloadAll(
+      items.map((i) => ({ urls: i.urls.filter(Boolean), dest: i.dest })),
+      (done, total) => onProgress?.({ key, phase, current: done, total })
+    )
+  } finally {
+    if (signal) signal.removeEventListener('abort', onAbort)
+    unregisterDownloader(key)
+  }
+}
 
 interface MrpackIndex {
   formatVersion: number
@@ -38,7 +71,8 @@ export async function installMrpackFile(
   displayName?: string,
   onProgress?: ProgressFn,
   meta?: { projectId?: string; versionId?: string; versionNumber?: string; url?: string },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  spawn?: SpawnFn
 ): Promise<string> {
   const indexBuf = readFileInsideZip(mrpackPath, 'modrinth.index.json')
   if (!indexBuf) throw new Error('不是有效的 Modrinth 整合包（缺少 modrinth.index.json）')
@@ -54,21 +88,28 @@ export async function installMrpackFile(
     loaderVersion
   })
 
-  await installInstanceGame(instance, onProgress, { signal })
+  await installInstanceGame(instance, onProgress, { signal, spawn })
 
   const gameDir = store.instanceGameDir(instance.id)
   const key = `modpack-${instance.id}`
   onProgress?.({ key, phase: '下载整合包文件', current: 0, total: index.files.length })
-  const errors = await downloadAll(
-    index.files.map((f) => ({ url: f.downloads, dest: path.join(gameDir, f.path), skipIfExists: true })),
-    6,
-    (done, total) => onProgress?.({ key, phase: '下载整合包文件', current: done, total }),
+  const errors = await downloadPackFiles(
+    key,
+    index.files.map((f) => ({ urls: f.downloads, dest: path.join(gameDir, f.path) })),
+    '下载整合包文件',
+    onProgress,
     signal
   )
 
   onProgress?.({ key, phase: '解压 overrides', current: 0, total: 1 })
   const extracted = await extractZipPrefixes(mrpackPath, ['overrides/', 'client-overrides/'], gameDir)
-  onProgress?.({ key, phase: `整合包安装完成（解压 ${extracted} 个文件）`, current: 1, total: 1, done: true })
+  onProgress?.({
+    key,
+    phase: `整合包安装完成（解压 ${extracted} 个文件${errors.length ? `，${errors.length} 个文件没下下来，见 download-errors.log` : ''}）`,
+    current: 1,
+    total: 1,
+    done: true
+  })
 
   if (errors.length) {
     fs.writeFileSync(path.join(store.instanceDir(instance.id), 'download-errors.log'), errors.join('\n'), 'utf-8')
@@ -92,13 +133,42 @@ export async function installMrpackFromUrl(
   url: string,
   displayName: string,
   onProgress?: ProgressFn,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  spawn?: SpawnFn
 ): Promise<string> {
   const tmp = path.join(store.dataDir, 'temp', `pack-${Date.now()}.mrpack`)
+  fs.mkdirSync(path.dirname(tmp), { recursive: true })
   onProgress?.({ key: 'modpack-download', phase: '下载整合包', current: 0, total: 1 })
-  await downloadFile(url, tmp, undefined, { skipIfExists: false, signal })
+  // 本体也走下载引擎：cdn.modrinth.com 单连接只有 ~50KB/s（还被墙），
+  // 一个 100MB 的包能下半小时；多连接 + 代理分流后才勉强能用。
+  const key = 'modpack-download'
+  const dl = new MultiDownloader({ threads: store.settings.downloadThreads ?? 32, chunks: 8, signal })
+  registerDownloader(key, dl)
+  const onAbort = () => dl.cancel()
+  if (signal) {
+    if (signal.aborted) dl.cancel()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
   try {
-    return await installMrpackFile(tmp, displayName, onProgress, undefined, signal)
+    const errs = await dl.downloadAll(
+      [{ urls: [url], dest: tmp, conns: 8 }],
+      (done, total) => onProgress?.({ key, phase: '下载整合包', current: done, total: total || 1 })
+    )
+    if (errs.length > 0) throw new Error(errs[0].split('\u0000').pop() ?? '下载失败')
+    if (!fs.existsSync(tmp)) throw new Error('下载失败（没有生成文件）')
+  } catch (e) {
+    if (signal?.aborted) throw new AbortError()
+    if (e instanceof AbortError) throw e
+    // 本体没下来就没法继续：告诉用户能用浏览器下 .mrpack 再本地导入
+    throw new Error(
+      `整合包本体没下下来（${(e as Error).message}）。可以在浏览器里打开下面的链接下载 .mrpack，再用「导入本地 .mrpack / .zip」安装：${url}`
+    )
+  } finally {
+    if (signal) signal.removeEventListener('abort', onAbort)
+    unregisterDownloader(key)
+  }
+  try {
+    return await installMrpackFile(tmp, displayName, onProgress, undefined, signal, spawn)
   } finally {
     fs.rmSync(tmp, { force: true })
   }
@@ -121,7 +191,8 @@ export async function installCurseforgeZip(
   zipPath: string,
   displayName?: string,
   onProgress?: ProgressFn,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  spawn?: SpawnFn
 ): Promise<string> {
   const manifestBuf = readFileInsideZip(zipPath, 'manifest.json')
   if (!manifestBuf) throw new Error('不是有效的 CurseForge 整合包（缺少 manifest.json）')
@@ -153,7 +224,7 @@ export async function installCurseforgeZip(
     loader,
     loaderVersion
   })
-  await installInstanceGame(instance, onProgress, { signal })
+  await installInstanceGame(instance, onProgress, { signal, spawn })
 
   const apiKey = store.settings.curseforgeApiKey.trim()
   const gameDir = store.instanceGameDir(instance.id)
@@ -163,7 +234,7 @@ export async function installCurseforgeZip(
     const ids = manifest.files.map((f) => f.fileID)
     const chunks: number[][] = []
     for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100))
-    const files: { url: string; dest: string }[] = []
+    const files: { urls: string[]; dest: string }[] = []
     let done = 0
     for (const chunk of chunks) {
       const res = await fetchJson<{
@@ -175,12 +246,12 @@ export async function installCurseforgeZip(
       })
       for (const f of res.data ?? []) {
         if (!f.downloadUrl) continue
-        files.push({ url: f.downloadUrl, dest: path.join(gameDir, 'mods', f.fileName) })
+        files.push({ urls: [f.downloadUrl], dest: path.join(gameDir, 'mods', f.fileName) })
       }
       done += chunk.length
       onProgress?.({ key, phase: '解析 CurseForge 文件', current: done, total: ids.length })
     }
-    await downloadAll(files, 6, (d, t) => onProgress?.({ key, phase: '下载模组', current: d, total: t }), signal)
+    await downloadPackFiles(key, files, '下载模组', onProgress, signal)
   } else {
     onProgress?.({
       key,

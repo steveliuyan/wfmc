@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import lottie, { type AnimationItem } from 'lottie-web'
 import { LauncherProvider, useLauncher } from './store'
-import { api, type AccountHealth } from './api'
+import { api, type AccountHealth, type SearchHit } from './api'
 import { translate } from './i18n'
 import Select from './components/Select'
 import Home from './views/Home'
@@ -16,6 +16,7 @@ import TaskPanel from './views/TaskPanel'
 import MusicPlayer from './views/MusicPlayer'
 import Disclaimer from './views/Disclaimer'
 import { setAutoI18n } from './autoI18n'
+import { setDeepLink } from './deeplink'
 import Manage from './views/Manage'
 import SettingsView from './views/Settings'
 import logoHorizontal from './assets/lottie-horizontal.json'
@@ -372,13 +373,26 @@ function Shell() {
     setAutoI18n(settings?.language === 'en')
   }, [settings?.language])
     useLauncher()
-  const [page, setPage] = useState<PageId>(() => {
+  const [page, setPageRaw] = useState<PageId>(() => {
     const q = new URLSearchParams(window.location.search).get('page')
     return (q as PageId) || 'home'
   })
+  const [navDir, setNavDir] = useState<'fwd' | 'back'>('fwd')
+  const pageRef = useRef<PageId>(page)
+  pageRef.current = page
+  // 切页时按导航里的先后顺序决定进场方向（往后翻从右边进、往前翻从左边进）
+  const setPage = useCallback((id: PageId) => {
+    const from = nav.findIndex((n) => n.id === pageRef.current)
+    const to = nav.findIndex((n) => n.id === id)
+    if (from >= 0 && to >= 0 && to !== from) setNavDir(to > from ? 'fwd' : 'back')
+    setPageRaw(id)
+  }, [])
   const [booted, setBooted] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [paletteQuery, setPaletteQuery] = useState('')
+  const [paletteHits, setPaletteHits] = useState<SearchHit[]>([])
+  const [paletteSel, setPaletteSel] = useState(0)
+  const [paletteBusy, setPaletteBusy] = useState(false)
   const [dropHint, setDropHint] = useState(false)
   const [dropKind, setDropKind] = useState<'file' | 'link'>('file')
 
@@ -487,22 +501,118 @@ function Shell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentId])
 
-  const palette = [
-    ...nav.map((n) => ({ label: n.label, kind: '页面', run: () => setPage(n.id) })),
+  // Ctrl+K：输入后 120ms 打一次 IPC（主进程只 readdir，不解析 jar）
+  useEffect(() => {
+    if (!paletteOpen) return
+    const q = paletteQuery.trim()
+    if (!q) {
+      setPaletteHits([])
+      return
+    }
+    setPaletteBusy(true)
+    const timer = setTimeout(async () => {
+      try {
+        setPaletteHits(await api.searchAll(q, currentId))
+      } catch {
+        setPaletteHits([])
+      } finally {
+        setPaletteBusy(false)
+      }
+    }, 120)
+    return () => clearTimeout(timer)
+  }, [paletteOpen, paletteQuery, currentId])
+
+  // 跳到设置页的某一节（页面本身没有锚点路由，就滚过去）
+  const goSettings = (anchor: string) => {
+    setPage('settings')
+    setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 280)
+  }
+
+  // 模糊匹配：忽略空格/下划线/连字符，还允许子序列（mcf → Moon Create Factory）
+  const fuzzy = (text: string, q: string) => {
+    const nq = q.toLowerCase().replace(/[\s_\-.·]+/g, '')
+    if (!nq) return true
+    const nt = text.toLowerCase().replace(/[\s_\-.·]+/g, '')
+    if (nt.includes(nq)) return true
+    let i = 0
+    for (const ch of nt) {
+      if (ch === nq[i]) i++
+      if (i === nq.length) return true
+    }
+    return false
+  }
+
+  // 把命中的那段用 <b> 标出来（只标第一处，够用了）
+  const mark = (text: string, q: string) => {
+    const t = q.trim()
+    if (!t) return text
+    const at = text.toLowerCase().indexOf(t.toLowerCase())
+    if (at < 0) return text
+    return (
+      <>
+        {text.slice(0, at)}
+        <b>{text.slice(at, at + t.length)}</b>
+        {text.slice(at + t.length)}
+      </>
+    )
+  }
+
+  type PaletteItem = { key: string; label: string; group: string; sub?: string; run: () => void }
+
+  const staticItems: PaletteItem[] = [
+    ...nav.map((n) => ({
+      key: `page-${n.id}`,
+      label: translate(settings?.language, `nav.${n.id}`, n.label),
+      group: '页面',
+      run: () => setPage(n.id)
+    })),
     ...instances.map((i) => ({
+      key: `ins-${i.id}`,
       label: i.name,
-      kind: `实例 · ${i.mcVersion}`,
+      group: '实例',
+      sub: `${i.mcVersion} · 切到它`,
       run: () => {
         setCurrentId(i.id)
         setPage('home')
       }
     })),
-    { label: '检查 Mod 更新', kind: '动作', run: () => setPage('manage') },
-    { label: '开一个服务端', kind: '动作', run: () => setPage('hosting') },
-    { label: '联机 / 穿透 / 房间码', kind: '动作', run: () => setPage('online') },
-    { label: '换皮肤 / 外置登录', kind: '动作', run: () => setPage('skin') }
-  ].filter((item) => !paletteQuery || item.label.toLowerCase().includes(paletteQuery.toLowerCase()))
+    { key: 'act-updates', label: '检查 Mod 更新', group: '动作', sub: '内容管理', run: () => { setDeepLink({ tab: 'updates' }); setPage('manage') } },
+    { key: 'act-crash', label: '看崩溃报告 / 运行日志', group: '动作', sub: '内容管理', run: () => { setDeepLink({ tab: 'crash' }); setPage('manage') } },
+    { key: 'act-saves', label: '存档快照与回滚', group: '动作', sub: '内容管理', run: () => { setDeepLink({ tab: 'saves' }); setPage('manage') } },
+    { key: 'act-shots', label: '看游戏截图', group: '动作', sub: '内容管理', run: () => { setDeepLink({ tab: 'shots' }); setPage('manage') } },
+    { key: 'act-host', label: '开一个服务端', group: '动作', sub: '一键开服', run: () => setPage('hosting') },
+    { key: 'act-online', label: '联机 / 穿透 / 房间码', group: '动作', sub: '联机', run: () => setPage('online') },
+    { key: 'act-skin', label: '换皮肤 / 外置登录', group: '动作', sub: '皮肤', run: () => setPage('skin') },
+    { key: 'act-usage', label: '清理缓存 / 下载 / 日志', group: '设置', sub: '数据目录占用明细', run: () => goSettings('set-data') },
+    { key: 'set-java', label: 'Java 运行时', group: '设置', sub: '手动指定 / 自动下载', run: () => goSettings('set-java') },
+    { key: 'set-download', label: '下载源 / 线程 / 限速', group: '设置', sub: '下载', run: () => goSettings('set-download') },
+    { key: 'set-performance', label: '内存与性能预设', group: '设置', sub: '性能', run: () => goSettings('set-performance') },
+    { key: 'set-appearance', label: '主题 / 外观 / 语言', group: '设置', sub: '界面与行为', run: () => goSettings('set-appearance') },
+    { key: 'set-update', label: '检查启动器更新', group: '设置', sub: '更新', run: () => goSettings('set-update') },
+    { key: 'set-credits', label: '致谢 / 关于', group: '设置', sub: '关于', run: () => goSettings('set-credits') }
+  ]
 
+  const hitItems: PaletteItem[] = paletteHits.map((h) => ({
+    key: `hit-${h.page}-${h.tab ?? ''}-${h.instanceId ?? ''}-${h.title}`,
+    label: h.title,
+    group: h.group,
+    sub: h.subtitle,
+    run: () => {
+      if (h.instanceId) setCurrentId(h.instanceId)
+      if (h.tab) setDeepLink({ instanceId: h.instanceId, tab: h.tab })
+      setPage(h.page as PageId)
+    }
+  }))
+
+  const q = paletteQuery.trim()
+  // 搜索命中的实例已经作为「实例」结果返回了，静态入口里同名的就不再重复列一遍
+  const hitInsIds = new Set(paletteHits.map((h) => h.instanceId).filter((v): v is string => !!v))
+  const filteredStatic = staticItems
+    .filter((it) => !(it.key.startsWith('ins-') && hitInsIds.has(it.key.slice(4))))
+    .filter((it) => fuzzy(`${it.label} ${it.sub ?? ''} ${it.group}`, q))
+  // 有搜索词时把「真搜到的东西」放前面，静态入口退到后面；没词就只列入口
+  const paletteItems = (q ? [...hitItems, ...filteredStatic] : filteredStatic).slice(0, 40)
+  const paletteCur = Math.min(paletteSel, Math.max(0, paletteItems.length - 1))
   if (!ready || !booted) {
     return (
       <>
@@ -671,7 +781,7 @@ function Shell() {
         </div>
       </aside>
 
-      <main className="main">
+      <main className={`main ${navDir === 'fwd' ? 'nav-fwd' : 'nav-back'}`}>
         {page === 'home' && <Home goto={setPage} />}
         {page === 'instances' && <Instances />}
         {page === 'download' && <Download goto={setPage} />}
@@ -720,36 +830,62 @@ function Shell() {
           <div className="palette" onClick={(e) => e.stopPropagation()}>
             <input
               autoFocus
-              placeholder="搜页面 / 实例 / 动作…（Enter 打开，Esc 关闭）"
+              placeholder="搜实例 / 模组 / 存档 / 服务器 / 页面 / 设置…"
               value={paletteQuery}
-              onChange={(e) => setPaletteQuery(e.target.value)}
+              onChange={(e) => {
+                setPaletteQuery(e.target.value)
+                setPaletteSel(0)
+              }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && palette[0]) {
-                  palette[0].run()
-                  setPaletteOpen(false)
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setPaletteSel((v) => Math.min(v + 1, Math.max(0, paletteItems.length - 1)))
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setPaletteSel((v) => Math.max(0, v - 1))
+                } else if (e.key === 'Enter') {
+                  const item = paletteItems[paletteCur]
+                  if (item) {
+                    item.run()
+                    setPaletteOpen(false)
+                  }
                 }
               }}
             />
             <div className="palette-list">
-              {palette.slice(0, 9).map((item, i) => (
-                <div
-                  className="palette-item"
-                  key={`${item.kind}-${item.label}`}
-                  onClick={() => {
-                    item.run()
-                    setPaletteOpen(false)
-                  }}
-                >
-                  <span>{item.label}</span>
-                  <span className="muted small">{item.kind}</span>
-                  {i === 0 && <span className="badge ok">Enter</span>}
-                </div>
+              {paletteItems.map((item, i) => (
+                <React.Fragment key={item.key}>
+                  {(i === 0 || paletteItems[i - 1].group !== item.group) && (
+                    <div className="palette-group">{item.group}</div>
+                  )}
+                  <div
+                    className={`palette-item ${i === paletteCur ? 'active' : ''}`}
+                    onMouseEnter={() => setPaletteSel(i)}
+                    onClick={() => {
+                      item.run()
+                      setPaletteOpen(false)
+                    }}
+                  >
+                    <span>{mark(item.label, paletteQuery)}</span>
+                    {item.sub && <span className="muted small p-sub">{item.sub}</span>}
+                    {i === paletteCur && <span className="badge ok">Enter</span>}
+                  </div>
+                </React.Fragment>
               ))}
-              {palette.length === 0 && <div className="muted small" style={{ padding: 12 }}>没有匹配项</div>}
+              {paletteItems.length === 0 && (
+                <div className="muted small" style={{ padding: 12 }}>
+                  {paletteBusy ? '正在搜…' : q ? '没有匹配项' : '输入点什么，比如「模组名」「存档名」「java」'}
+                </div>
+              )}
+            </div>
+            <div className="palette-foot">
+              <span>↑↓ 选择 · Enter 打开 · Esc 关闭</span>
+              <span>{paletteBusy ? '搜索中…' : `${paletteItems.length} 项`}</span>
             </div>
           </div>
         </div>
       )}
+
     </div>
   )
 }

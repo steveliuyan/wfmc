@@ -7,7 +7,7 @@ import { store } from './store'
 import { ensureJava, requiredJavaMajor } from './java'
 import { ensureGameLanguage } from './options'
 import { ensureNatives } from './natives'
-import { listContent } from './content'
+import { backupSaves, listContent, pruneSaveBackups } from './content'
 import { ensureGamePath, resourcePathFor } from './paths'
 import { ensureInjector } from './authlib'
 import { diagnoseMods } from './moddoctor'
@@ -85,6 +85,22 @@ export async function launchInstance(
   // 新实例第一次启动默认是英文界面，这里先把 lang 写成中文（已经有的不动）
   const langState = ensureGameLanguage(gameDir)
   if (langState !== 'kept') onLog(instance.id, '[WFMC] 已把游戏语言设为简体中文（options.txt）')
+  // 启动前自动打一份存档快照：游戏崩了/世界废了还能回滚（设置里可关）
+  if (settings.autoBackupSaves !== false) {
+    try {
+      const savesDir = path.join(gameDir, 'saves')
+      const hasSaves = fs.existsSync(savesDir) && fs.readdirSync(savesDir).length > 0
+      if (hasSaves) {
+        const file = backupSaves(instance.id)
+        if (file) {
+          pruneSaveBackups(instance.id)
+          onLog(instance.id, `[WFMC] 启动前已备份存档：${path.basename(file)}`)
+        }
+      }
+    } catch (e) {
+      onLog(instance.id, `[WFMC] 存档备份失败（不影响启动）：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
   onLog(
     instance.id,
     `[WFMC] 版本: ${versionId}${instance.loader !== 'vanilla' ? ` (${instance.loader} ${instance.loaderVersion ?? ''})` : ''}`

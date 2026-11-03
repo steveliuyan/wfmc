@@ -1,14 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { api, formatSize } from '../api'
+import { api, formatSize, progressPercent, progressText } from '../api'
 import { useLauncher, useT } from '../store'
 import SourcePicker from '../components/SourcePicker'
 import Select from '../components/Select'
 import { SkeletonCards } from '../components/Skeleton'
+import ModpackSearch, { resourcePageUrl } from '../components/ModpackSearch'
 import type { ContentItem, DepItem, FavResource, InstallPlan, ResourceHit, ResourceVersion } from '../../shared/types'
 
 type Kind = 'mod' | 'shader' | 'resourcepack'
+/** 整合包是独立分栏（内容来自 ModpackSearch），不参与 kind 那套检索 */
+type Tab = Kind | 'modpack'
 
 const kindLabel: Record<Kind, string> = { mod: '模组', shader: '光影', resourcepack: '资源包' }
+const tabLabel: Record<Tab, string> = { ...kindLabel, modpack: '整合包' }
 
 /** 中文资源站：Modrinth/CurseForge 搜不到中文时，这几家是中文玩家真正在用的地方 */
 const SITES: { name: string; url: string; note: string }[] = [
@@ -36,10 +40,12 @@ function DepLine({ d }: { d: DepItem }) {
     </div>
   )
 }
-export default function Resources({ goto }: { goto?: (p: 'settings') => void }) {
+export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances') => void }) {
   const t = useT()
   const { current, currentId, instances, toast, progress, settings, saveSettings } = useLauncher()
-  const [kind, setKind] = useState<Kind>('mod')
+  const [tab, setTab] = useState<Tab>('mod')
+  // 「整合包」分栏自己不查模组/光影，kind 用 'mod' 占位，别让下面那些 effect 空跑出错
+  const kind: Kind = tab === 'modpack' ? 'mod' : tab
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<ResourceHit[]>([])
   const [searching, setSearching] = useState(false)
@@ -113,6 +119,16 @@ export default function Resources({ goto }: { goto?: (p: 'settings') => void }) 
     pageUrl: f.pageUrl ?? `https://modrinth.com/project/${f.projectId}`
   })
   const shown = favOnly ? favs.filter((f) => f.kind === kind).map(favAsHit) : hits
+
+  /** 「页面」按钮：Modrinth 搜索接口不返回 page_url，按 slug 拼一个，别点了没反应 */
+  const openHitPage = (h: ResourceHit) => {
+    const url = resourcePageUrl(h)
+    if (!url) {
+      toast('这个项目没有可打开的页面', 'error')
+      return
+    }
+    api.openExternal(url).catch(() => toast(`打不开浏览器，链接：${url}`, 'error'))
+  }
 
   const target = useMemo(() => instances.find((i) => i.id === targetId) ?? current, [instances, targetId, current])
 
@@ -259,6 +275,28 @@ export default function Resources({ goto }: { goto?: (p: 'settings') => void }) 
     }
   }
 
+  // 整合包分栏：页头和分栏条共用，内容交给 ModpackSearch
+  if (tab === 'modpack') {
+    return (
+      <div className="page">
+        <header className="page-head">
+          <div>
+            <h1>{t('模组 · 光影 · 资源包', 'Mods · Shaders · Packs')}</h1>
+            <p className="muted">整合包：搜 Modrinth 上的整合包，一键装成新实例（自动下对应版本的 Minecraft 和加载器），也能导入本地 .mrpack</p>
+          </div>
+          <div className="tabs">
+            {(Object.keys(tabLabel) as Tab[]).map((k) => (
+              <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>
+                {tabLabel[k]}
+              </button>
+            ))}
+          </div>
+        </header>
+        <ModpackSearch goto={goto} />
+      </div>
+    )
+  }
+
   return (
     <div className="page">
       <header className="page-head">
@@ -271,9 +309,9 @@ export default function Resources({ goto }: { goto?: (p: 'settings') => void }) 
           </p>
         </div>
         <div className="tabs">
-          {(Object.keys(kindLabel) as Kind[]).map((k) => (
-            <button key={k} className={kind === k ? 'on' : ''} onClick={() => setKind(k)}>
-              {kindLabel[k]}
+          {(Object.keys(tabLabel) as Tab[]).map((k) => (
+            <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>
+              {tabLabel[k]}
             </button>
           ))}
         </div>
@@ -463,7 +501,7 @@ export default function Resources({ goto }: { goto?: (p: 'settings') => void }) 
               <button className="btn sm" onClick={() => openVersions(h)}>
                 {versions[h.projectId] ? '收起版本' : '选版本'}
               </button>
-              <button className="btn ghost sm" onClick={() => api.openExternal(h.pageUrl)}>
+              <button className="btn ghost sm" onClick={() => openHitPage(h)}>
                 页面
               </button>
             </div>
@@ -578,13 +616,13 @@ export default function Resources({ goto }: { goto?: (p: 'settings') => void }) 
       {activeProgress.length > 0 && (
         <div className="card">
           {activeProgress.map((p, i) => {
-            const pct = p.total ? Math.min(100, Math.round(((p.current ?? 0) / p.total) * 100)) : 0
+            const pct = progressPercent(p)
             return (
               <div className="progress-row" key={i}>
                 <div className="progress-label">
                   <span>{p.phase}</span>
                   <span className="progress-nums muted">
-                    {p.current ?? 0}/{p.total ?? 0}
+                    {progressText(p)}
                     <b>{pct}%</b>
                   </span>
                 </div>

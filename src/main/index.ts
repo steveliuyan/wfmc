@@ -4,10 +4,23 @@ import path from 'node:path'
 import { store } from './store'
 import { registerIpc, setMainWindow } from './ipc'
 import { installGlobalHandlers, logError } from './errlog'
+import { flushMetaCache } from './content'
 import { refreshTray, setupTray } from './tray'
-import { applyProxy } from './proxy'
+import { applyProxy, installChromiumFetch } from './proxy'
 
 const devUrl = process.env.VITE_DEV_SERVER_URL
+
+/**
+ * 关掉 HTTP/2 / QUIC。
+ *
+ * 原因：cdn.modrinth.com、代理出口、以及大部分镜像都是「按连接限速」的。
+ * HTTP/2 会把同域名的所有请求复用进一条 TCP 连接，于是 8 条并发 Range 请求
+ * 全挤在一条连接里共享那 ~50KB/s 的配额 —— 实测同一个 7.2MB 文件，
+ * 开着 h2 只有 ~55KB/s，关掉之后 8 条连接各走各的，能跑 ~150KB/s。
+ * QUIC（h3）同理，也是复用，一起关掉。
+ */
+app.commandLine.appendSwitch('disable-http2')
+app.commandLine.appendSwitch('disable-quic')
 
 /** 记住的窗口位置可能来自别的显示器配置，先校验它还在可见范围内 */
 function safeBounds(
@@ -138,6 +151,8 @@ app.on('render-process-gone', (_e, _wc, details) => {
 app.whenReady().then(async () => {
     Menu.setApplicationMenu(null)
     store.load()
+    // 主进程的网络统一走 Chromium：环境变量里的残留代理不会再把请求带沟里
+    installChromiumFetch()
     await applyProxy(store.settings.proxy)
     registerIpc()
     const win = createWindow()
@@ -148,6 +163,9 @@ app.whenReady().then(async () => {
       if (BrowserWindow.getAllWindows().length === 0) setMainWindow(createWindow())
     })
   })
+
+  // 退出前把 jar 元数据缓存落盘，下次进内容管理不用再拆一遍压缩包
+  app.on('will-quit', () => flushMetaCache())
 
   app.on('window-all-closed', () => {
     // 有托盘在，窗口关掉不退出（服务端还能继续跑），只有「退出」菜单/强制退出才真的结束

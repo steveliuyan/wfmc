@@ -7,7 +7,7 @@ import { downloadFile, fetchJson, fetchText, sources } from './net'
 import { runProcess } from './proc'
 import { store } from './store'
 import { ensureJava } from './java'
-import { installResolvedGame, installVanilla } from './game'
+import { installResolvedGame, installVanilla, type SpawnFn } from './game'
 import { readFileInsideZip } from './zip'
 
 export { installVanilla }
@@ -17,14 +17,36 @@ interface VersionManifest {
   versions: { id: string; type: string; url: string; releaseTime: string }[]
 }
 
-let manifestCache: { at: number; data: VersionManifest } | undefined
+/**
+ * 愚人节版本：官方清单里它们的 type 也是 snapshot，只能按 id 认。
+ * 名单来自官方 version_manifest_v2（1.8 那年的「2.0」从没进过清单，就只能靠整合包/自备 jar）。
+ */
+const APRIL_FOOLS = new Set([
+  '15w14a', // 2015：爱的抱抱
+  '1.rv-pre1', // 2016：熔岩生存
+  '3d shareware v1.34', // 2019：3D 共享软件
+  '20w14infinite', // 2020：无限维度
+  '22w13oneblockatatime', // 2022：一个方块
+  '23w13a_or_b', // 2023：投票更新
+  '24w14potato', // 2024：毒土豆
+  '25w14craftmine', // 2025：合成挖矿
+  '2.0',
+  '2.0_blue'
+])
+
+/** 这个 id 是不是愚人节版本 */
+export function isAprilFools(id: string): boolean {
+  return APRIL_FOOLS.has(id.trim().toLowerCase())
+}
+
+let manifestCache: { at: number; data: RemoteVersion[] } | undefined
 
 /** 拉取远程版本列表（官方/镜像，一个不通自动换另一个） */
 export async function listRemoteVersions(): Promise<RemoteVersion[]> {
   if (manifestCache && Date.now() - manifestCache.at < 10 * 60 * 1000) {
-    return manifestCache.data.versions
+    return manifestCache.data
   }
-  const preferMirror = store.settings.downloadSource === 'mirror'
+  const preferMirror = store.settings.downloadSource !== 'official'
   const urls = preferMirror
     ? [sources(true).versionManifest, sources(false).versionManifest]
     : [sources(false).versionManifest, sources(true).versionManifest]
@@ -40,13 +62,15 @@ export async function listRemoteVersions(): Promise<RemoteVersion[]> {
     }
   }
   if (!data) throw new Error(`版本清单拉不下来（两个源都不通）：${(lastErr as Error)?.message ?? '网络错误'}`)
-  manifestCache = { at: Date.now(), data }
-  return data.versions.map((v) => ({
+  const list: RemoteVersion[] = data.versions.map((v) => ({
     id: v.id,
     type: v.type,
     releaseTime: v.releaseTime,
-    url: v.url
+    url: v.url,
+    aprilFools: isAprilFools(v.id) || undefined
   }))
+  manifestCache = { at: Date.now(), data: list }
+  return list
 }
 
 /** 本地已安装版本 */
@@ -506,11 +530,11 @@ async function installByInstallerJar(
 export async function installInstanceGame(
   instance: Instance,
   onProgress?: ProgressFn,
-  options?: { skipVanilla?: boolean; signal?: AbortSignal }
+  options?: { skipVanilla?: boolean; signal?: AbortSignal; spawn?: SpawnFn }
 ): Promise<Instance> {
   const gameDir = store.instanceGameDir(instance.id)
   if (!options?.skipVanilla) {
-    await installVanilla(instance.mcVersion, gameDir, onProgress, undefined, options?.signal)
+    await installVanilla(instance.mcVersion, gameDir, onProgress, undefined, options?.signal, options?.spawn)
   }
   let versionId = instance.mcVersion
   if (instance.loader !== 'vanilla' && instance.loaderVersion) {

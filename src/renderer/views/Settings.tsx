@@ -2,11 +2,12 @@ import React, { useEffect, useState } from 'react'
 import { api, formatSize, friendlyError } from '../api'
 import type { UpdateInfo } from '../api'
 import { useLauncher, useT } from '../store'
-import type { JavaInfo, ThemeMode } from '../../shared/types'
+import type { DiskUsage, JavaInfo, ThemeMode } from '../../shared/types'
 import { CREDITS, CREDIT_KIND_LABEL, type CreditKind } from '../../shared/credits'
 import Select from '../components/Select'
 import Disclaimer from './Disclaimer'
 import UpdateCenter from './UpdateCenter'
+import { deriveAccent } from '../color'
 
 /** Aikar 的 G1GC 参数（社区公认的 Minecraft 服务端/客户端优化组合） */
 const JVM_PRESETS: { label: string; value: string }[] = [
@@ -53,6 +54,9 @@ export default function SettingsView() {
   const [foundData, setFoundData] = useState<Awaited<ReturnType<typeof api.dataDiscover>>>([])
   // 数据目录占用（主进程有缓存，点了才统计）
   const [dataSize, setDataSize] = useState<{ bytes: number; partial: boolean } | null>(null)
+  // 占用明细（实例 / 下载 / 缓存 / 快照 / 日志），点按钮才走盘
+  const [usage, setUsage] = useState<DiskUsage | null>(null)
+  const [usageBusy, setUsageBusy] = useState(false)
   // 一键删除全部数据正在跑（按钮变灰，防止连点）
   const [wiping, setWiping] = useState(false)
   // 数据目录体检：放在安装目录里的话，更新安装包会把整份数据清掉（踩过：D:\WFMC\data 每次更新都没）
@@ -277,6 +281,26 @@ export default function SettingsView() {
                     onClick={() => saveSettings({ themeCustom: { ...settings.themeCustom, accent: c } })}
                   />
                 ))}
+                {(() => {
+                  const p = deriveAccent(settings.themeCustom?.accent ?? '#5b3fd6', resolvedTheme)
+                  const chips: { c: string; t: string }[] = [
+                    { c: p.accent, t: '主色' },
+                    { c: p.accent2, t: '亮调' },
+                    { c: p.soft, t: '柔光' },
+                    { c: p.ring, t: '焦点环' }
+                  ]
+                  return (
+                    <span
+                      className="accent-derived"
+                      title="按 LAB 感知亮度从主色派生：深色模式自动提亮、浅色模式自动压暗，主色为灰时按原样保留"
+                    >
+                      派生
+                      {chips.map((k) => (
+                        <span key={k.t} className="accent-chip" style={{ background: k.c }} title={k.t} />
+                      ))}
+                    </span>
+                  )
+                })()}
                 <label style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   圆角 {settings.themeCustom?.radius ?? 14}px
                   <input
@@ -329,6 +353,25 @@ export default function SettingsView() {
                 </div>
                 <div>
                   <div className="set-block-title" style={{ fontWeight: 400, marginBottom: 6, fontSize: 12 }}>
+                    启动前自动备份存档
+                  </div>
+                  <div className="chips">
+                    <button
+                      className={`chip ${settings.autoBackupSaves !== false ? 'on' : ''}`}
+                      onClick={() => saveSettings({ autoBackupSaves: true })}
+                    >
+                      开着（崩了能回滚）
+                    </button>
+                    <button
+                      className={`chip ${settings.autoBackupSaves === false ? 'on' : ''}`}
+                      onClick={() => saveSettings({ autoBackupSaves: false })}
+                    >
+                      关掉
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <div className="set-block-title" style={{ fontWeight: 400, marginBottom: 6, fontSize: 12 }}>
                     语言
                   </div>
                   <div className="chips">
@@ -376,18 +419,15 @@ export default function SettingsView() {
                 <label>
                   下载线程数
                   <Select
-                    value={String(settings.downloadThreads ?? 48)}
+                    value={String(settings.downloadThreads ?? 16)}
                     width="100%"
                     options={[
-                      { value: '8', label: '8 线程（省带宽）' },
-                      { value: '16', label: '16 线程' },
-                      { value: '32', label: '32 线程' },
-                      { value: '48', label: '48 线程（推荐）' },
-                      { value: '64', label: '64 线程' },
-                      { value: '96', label: '96 线程（激进）' },
-                      { value: '128', label: '128 线程（极限）' }
+                      { value: '4', label: '4 线程（省带宽）' },
+                      { value: '8', label: '8 线程' },
+                      { value: '16', label: '16 线程（推荐）' },
+                      { value: '32', label: '32 线程（激进）' }
                     ]}
-                    onChange={(v) => saveSettings({ downloadThreads: Number(v) || 48 })}
+                    onChange={(v) => saveSettings({ downloadThreads: Number(v) || 16 })}
                   />
                 </label>
                 <label>
@@ -404,9 +444,13 @@ export default function SettingsView() {
                   代理（HTTP / SOCKS5）
                   <input
                     value={settings.proxy}
-                    placeholder="http://127.0.0.1:7890（留空 = 直连）"
+                    placeholder="http://127.0.0.1:7890（留空 = 跟随系统代理）"
                     onChange={(e) => saveSettings({ proxy: e.target.value })}
                   />
+                  <span className="hint">
+                    开加速器 / VPN 的话一般留空就行（会跟随系统代理）。文件本体始终直连多线程下载，只
+                    有接口和元数据走代理，这样最快。
+                  </span>
                 </label>
               </div>
             </div>
@@ -841,9 +885,80 @@ export default function SettingsView() {
                 旧目录不会自动删，删完目录还在，可以直接用。
               </p>
             </div>
+{/* 占用明细：哪块占地方、哪块能一键清 */}
+            <div className="set-block">
+              <div className="set-block-title">
+                <span>占用明细</span>
+                <span className="muted small">清缓存 / 下载 / 日志，游戏文件不动</span>
+              </div>
+              <div className="set-actions">
+                <button
+                  className="btn ghost sm"
+                  disabled={usageBusy}
+                  onClick={async () => {
+                    setUsageBusy(true)
+                    try {
+                      setUsage(await api.dataUsage())
+                    } catch (e) {
+                      toast(`统计失败：${(e as Error).message}`, 'error')
+                    } finally {
+                      setUsageBusy(false)
+                    }
+                  }}
+                >
+                  {usageBusy ? '正在统计…' : usage ? '重新统计' : '算一下各块占多少'}
+                </button>
+                {usage && (
+                  <span className="muted small">
+                    合计 {formatSize(usage.total.bytes)}
+                    {usage.partial ? ' +' : ''} · {usage.total.files} 个文件
+                  </span>
+                )}
+              </div>
+              {usage && (
+                <div className="usage-list">
+                  {usage.items.map((it) => (
+                    <div className="usage-row" key={it.key}>
+                      <div className="usage-head">
+                        <span className="usage-label">{it.label}</span>
+                        <b className="usage-size">{formatSize(it.bytes)}</b>
+                        <span className="muted small">{it.files} 个文件</span>
+                        {it.cleanable && (
+                          <button
+                            className="btn sm ghost"
+                            disabled={it.bytes === 0}
+                            onClick={async () => {
+                              const ok = await askConfirm({
+                                title: `清理${it.label}`,
+                                message: `${it.hint ?? ''}\n\n会删掉 ${it.files} 个文件，空出 ${formatSize(it.bytes)}。这一步没法撤销。`,
+                                okText: '清理',
+                                danger: true
+                              })
+                              if (!ok) return
+                              try {
+                                const r = await api.cleanUsage(it.key as 'downloads' | 'cache' | 'logs')
+                                toast(`已清理 ${r.files} 个文件，空出 ${formatSize(r.bytes)}`, 'success')
+                                setUsage(await api.dataUsage())
+                                setDataSize(null)
+                              } catch (e) {
+                                toast(`清理失败：${(e as Error).message}`, 'error')
+                              }
+                            }}
+                          >
+                            清理
+                          </button>
+                        )}
+                      </div>
+                      <div className="muted small usage-hint">{it.hint ?? it.path}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
 
-          {/* ── Java ────────────────────────────────── */}
+          
+                      {/* ── Java ────────────────────────────────── */}
           <section id="set-java" className="card set-card">
             <SetHead
               icon="☕"

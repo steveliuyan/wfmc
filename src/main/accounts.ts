@@ -10,13 +10,13 @@ interface DeviceCodeResponse {
   verification_uri: string
   expires_in: number
   interval: number
-  message: string
+  message?: string
 }
 
 export interface DeviceCodeInfo {
   userCode: string
   verificationUri: string
-  message: string
+  message?: string
   expiresIn: number
 }
 
@@ -50,8 +50,26 @@ function msClientId(): string {
 }
 
 /**
- * 微软正版登录 - 设备码流程第一步：拿到 user_code
+ * 两套端点不能混用，混用就是 400 AADSTS700016（应用不在租户里）：
+ * - 内置的 00000000402b5328 是「旧版 Live 客户端 ID」，只存在于消费级 Live 目录，
+ *   必须走 login.live.com 的 oauth20 端点；
+ * - 用户自填的 Azure 应用 ID 是在自己的租户里注册的，走 v2.0 /consumers。
+ * 两条链路换出来的令牌都是 XBL 的 "d=" RPS 票，后面完全一样。
  */
+const LIVE_ENDPOINTS = {
+  deviceCode: 'https://login.live.com/oauth20_connect.srf',
+  token: 'https://login.live.com/oauth20_token.srf'
+}
+const AAD_ENDPOINTS = {
+  deviceCode: 'https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode',
+  token: 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
+}
+
+function msEndpoints() {
+  return store.settings.microsoftClientId.trim() ? AAD_ENDPOINTS : LIVE_ENDPOINTS
+}
+
+/** 微软正版登录 - 设备码流程第一步：拿到 user_code */
 export async function startMicrosoftLogin(): Promise<DeviceCodeInfo & { deviceCode: string }> {
   const clientId = msClientId()
   const body = new URLSearchParams({
@@ -59,14 +77,11 @@ export async function startMicrosoftLogin(): Promise<DeviceCodeInfo & { deviceCo
     scope: 'XboxLive.signin offline_access',
     response_type: 'device_code'
   })
-  const res = await fetchJson<DeviceCodeResponse>(
-    'https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode',
-    { method: 'POST', body }
-  )
+  const res = await withRetry(() => fetchJson<DeviceCodeResponse>(msEndpoints().deviceCode, { method: 'POST', body }))
   return {
     deviceCode: res.device_code,
     userCode: res.user_code,
-    verificationUri: res.verification_uri,
+    verificationUri: res.verification_uri || 'https://www.microsoft.com/link',
     message: res.message,
     expiresIn: res.expires_in
   }
@@ -78,6 +93,47 @@ interface TokenResponse {
   expires_in?: number
   error?: string
   error_description?: string
+}
+
+/**
+ * 登录请求走系统代理，偶发 "fetch failed"（代理抖动/DNS 抽风）很常见。
+ * 这类纯网络错误重试两次比让用户重头点一遍划算；业务失败（400/错误码）一律原样抛出去。
+ */
+async function withRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
+  let last: Error | undefined
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn()
+    } catch (e) {
+      last = e as Error
+      const msg = last.message ?? ''
+      const retriable =
+        /fetch failed|network|ECONN|ETIMEDOUT|EAI_AGAIN|socket hang up|请求失败 5\d\d|aborterror|timeout/i.test(msg)
+      if (!retriable || i === tries - 1) throw last
+      await new Promise((r) => setTimeout(r, 600 * (i + 1)))
+    }
+  }
+  throw last as Error
+}
+
+/**
+ * 令牌端点的「业务失败」是 400 + JSON，不是网络失败：
+ * 轮询时 authorization_pending / slow_down 都是 400，刷新时 invalid_grant 也是 400。
+ * 所以这里按状态码无关的方式解析 body，把判断交给调用方。
+ */
+async function postToken<T>(url: string, body: URLSearchParams): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    body,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    signal: AbortSignal.timeout(20_000)
+  })
+  const text = await res.text()
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new Error(`令牌接口返回了非 JSON 内容 (${res.status}): ${text.slice(0, 200)}`)
+  }
 }
 
 async function pollToken(deviceCode: string, interval: number, timeoutMs: number): Promise<TokenResponse> {
@@ -92,10 +148,7 @@ async function pollToken(deviceCode: string, interval: number, timeoutMs: number
       grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
       device_code: deviceCode
     })
-    const res = await fetchJson<TokenResponse>('https://login.microsoftonline.com/consumers/oauth2/v2.0/token', {
-      method: 'POST',
-      body
-    })
+    const res = await withRetry(() => postToken<TokenResponse>(msEndpoints().token, body))
     if (res.access_token) return res
     if (res.error === 'authorization_pending') continue
     if (res.error === 'slow_down') {
@@ -148,10 +201,7 @@ export async function refreshAccount(accountId: string): Promise<Account | undef
     refresh_token: account.refreshToken,
     scope: 'XboxLive.signin offline_access'
   })
-  const token = await fetchJson<TokenResponse>('https://login.microsoftonline.com/consumers/oauth2/v2.0/token', {
-    method: 'POST',
-    body
-  })
+  const token = await withRetry(() => postToken<TokenResponse>(msEndpoints().token, body))
   if (!token.access_token) return account
   const authenticator = new MicrosoftAuthenticator()
   const { minecraftXstsResponse } = await authenticator.acquireXBoxToken(token.access_token)

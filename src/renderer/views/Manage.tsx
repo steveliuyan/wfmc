@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
 import { api, formatSize, friendlyError, type ModIssue, type ModUpdateItem } from '../api'
 import { useLauncher, useT } from '../store'
-import type { ContentItem, ContentKind, CrashDiagnosis, CrashReport } from '../../shared/types'
+import { takeDeepLink } from '../deeplink'
+import type { ContentItem, ContentKind, CrashDiagnosis, CrashReport, SaveBackup } from '../../shared/types'
 import type { PageId } from '../App'
 
 type Tab = ContentKind | 'crash' | 'log' | 'updates' | 'shots' | 'datapacks'
@@ -45,6 +46,9 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     mods: { id: string; name: string; covered: boolean; selfChinese: boolean }[]
   }>()
   const [worlds, setWorlds] = useState<string[]>([])
+  // 存档快照（回滚用）
+  const [savesBackups, setSavesBackups] = useState<SaveBackup[]>([])
+  const [showBackups, setShowBackups] = useState(false)
   const [packView, setPackView] = useState<{
     name: string
     size: number
@@ -69,6 +73,14 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     if (!targetId && currentId) setTargetId(currentId)
   }, [currentId, targetId])
 
+  // 从 Ctrl+K 全局搜索跳过来：可能要换实例 + 换 tab（比如直接看某个模组、某个存档）
+  useEffect(() => {
+    const d = takeDeepLink()
+    if (!d) return
+    if (d.instanceId) setTargetId(d.instanceId)
+    if (d.tab) setTab(d.tab as Tab)
+  }, [])
+
   const refreshShots = async () => {
     if (!activeId) return
     setShots(await api.screenshots(activeId))
@@ -88,10 +100,24 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     }
   }
 
+  const refreshBackups = async () => {
+    if (!activeId) return
+    try {
+      setSavesBackups(await api.saveBackups(activeId))
+    } catch {
+      setSavesBackups([])
+    }
+  }
+
   useEffect(() => {
     refresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, activeId])
+
+  useEffect(() => {
+    if (tab === 'saves' && showBackups) refreshBackups()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, activeId, showBackups])
 
   // 模组页顺便算一下汉化包覆盖情况：装了没生效时能立刻看出来是哪个模组没收录
   useEffect(() => {
@@ -543,10 +569,84 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                 >
                   备份所有存档
                 </button>
+                <button
+                  className={showBackups ? 'btn' : 'btn ghost'}
+                  onClick={async () => {
+                    const next = !showBackups
+                    setShowBackups(next)
+                    if (next) await refreshBackups()
+                  }}
+                >
+                  存档快照
+                </button>
               </>
             )}
             <span className="muted small">共 {items.length} 项{loading ? ' · 读取中…' : ''}</span>
           </div>
+        </div>
+      )}
+
+      {tab === 'saves' && showBackups && (
+        <div className="card">
+          <div className={'toolbar'}>
+            <b>存档快照</b>
+            <span className="muted small">
+              启动游戏前自动打一份，最多留 12 份；回滚时会先把当前存档再备份一次，不会把新世界弄丢。
+            </span>
+            <span className="spacer" />
+            <button
+              className="btn sm ghost"
+              onClick={async () => {
+                try {
+                  const file = await api.backupSaves(activeId)
+                  if (!file) return toast('存档目录是空的，没什么可备份', 'info')
+                  toast('已备份：' + file.split(/[\\/]/).pop(), 'success')
+                  await refreshBackups()
+                } catch (e) {
+                  toast('备份失败：' + friendlyError(e), 'error')
+                }
+              }}
+            >
+              立即备份
+            </button>
+            <button className="btn sm" onClick={() => setShowBackups(false)}>收起</button>
+          </div>
+          {savesBackups.length === 0 ? (
+            <div className="muted small">还没有快照。启动一次游戏就会自动生成，或者点「立即备份」。</div>
+          ) : (
+            <div className="file-list">
+              {savesBackups.map((b) => (
+                <div className="file-row content-row" key={b.file}>
+                  <div className="content-icon dir">🗂</div>
+                  <div className="content-main">
+                    <div className="content-name">{new Date(b.time).toLocaleString('zh-CN', { hour12: false })}</div>
+                    <div className="content-desc" title={b.file}>{b.name}</div>
+                  </div>
+                  <span className="muted small">{formatSize(b.bytes)}</span>
+                  <span className="row">
+                    <button
+                      className="btn sm"
+                      onClick={async () => {
+                        if (!(await askConfirm({ title: '回滚存档', message: '把存档回滚到这份快照？回滚前会先自动备份当前存档。', okText: '回滚' }))) return
+                        try {
+                          const r = await api.restoreSaveBackup(activeId, b.file)
+                          toast('已回滚 ' + r.restored + ' 个文件（' + (r.worlds.join('、') || '存档') + '）', 'success')
+                          if (r.safetyBackup) toast('回滚前的存档也留了一份，后悔了还能退回来', 'info')
+                          await refresh()
+                          await refreshBackups()
+                          setWorlds(await api.worlds(activeId))
+                        } catch (e) {
+                          toast('回滚失败：' + friendlyError(e), 'error')
+                        }
+                      }}
+                    >
+                      回滚
+                    </button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

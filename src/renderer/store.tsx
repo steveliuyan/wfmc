@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { Account, Instance, LaunchStatePayload, ProgressPayload, Settings, ThemeMode } from '../shared/types'
 import { api, type TaskInfo } from './api'
+import { ACCENT_KEYS, accentVars, deriveAccent } from './color'
+import { startAdaptiveBlur } from './adaptive'
 
 export interface Toast {
   id: number
@@ -146,32 +148,47 @@ export function LauncherProvider({ children }: { children: React.ReactNode }) {
     return () => mq?.removeEventListener?.('change', onChange)
   }, [settings?.theme])
 
-  // 主题自定义：主色 / 圆角 / 背景图 → 直接改 CSS 变量
+  // 主题自定义：主色（LAB 派生整套） / 圆角 / 背景图 → 改 CSS 变量
   useEffect(() => {
     const root = document.documentElement
     const custom = settings?.themeCustom
     if (custom?.accent) {
-      root.style.setProperty('--accent', custom.accent)
-      root.style.setProperty(
-        '--accent-soft',
-        `color-mix(in srgb, ${custom.accent} 18%, transparent)`
-      )
+      const vars = accentVars(deriveAccent(custom.accent, resolvedTheme))
+      for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v)
     } else {
-      root.style.removeProperty('--accent')
-      root.style.removeProperty('--accent-soft')
+      for (const k of ACCENT_KEYS) root.style.removeProperty(k)
     }
     if (typeof custom?.radius === 'number') root.style.setProperty('--radius', `${custom.radius}px`)
     else root.style.removeProperty('--radius')
 
     const body = document.body
     if (custom?.wallpaper) {
-      body.style.backgroundImage = `url("file://${custom.wallpaper.replace(/\\/g, '/')}")`
-      body.style.backgroundSize = 'cover'
-      body.style.backgroundPosition = 'center'
+      const url = `file://${custom.wallpaper.replace(/\\/g, '/')}`
+      // 壁纸交给 body::before 那一层去画（好做模糊 + 不跟着内容滚）
+      root.style.setProperty('--wall', `url("${url}")`)
+      body.classList.add('has-wall')
     } else {
-      body.style.backgroundImage = ''
+      root.style.removeProperty('--wall')
+      body.classList.remove('has-wall')
     }
-  }, [settings?.themeCustom?.accent, settings?.themeCustom?.radius, settings?.themeCustom?.wallpaper])
+  }, [
+    settings?.themeCustom?.accent,
+    settings?.themeCustom?.radius,
+    settings?.themeCustom?.wallpaper,
+    resolvedTheme
+  ])
+
+  // 壁纸模糊自适应：按实测帧时间挑档，结果写 --wall-blur
+  useEffect(() => {
+    if (!settings?.themeCustom?.wallpaper) return
+    const handle = startAdaptiveBlur((tier, px) => {
+      const root = document.documentElement
+      root.style.setProperty('--wall-blur', `${px}px`)
+      root.dataset.blurTier = tier
+      document.body.classList.toggle('wall-blurred', px > 0)
+    })
+    return () => handle.dispose()
+  }, [settings?.themeCustom?.wallpaper])
 
   useEffect(() => {
     ;(async () => {

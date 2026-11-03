@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
-import { api, friendlyError, formatDuration, formatSize, type InstanceDetail } from '../api'
+import { api, friendlyError, formatDuration, formatSize, versionTypeLabel, type InstanceDetail } from '../api'
 import { useLauncher, useT } from '../store'
-import type { Instance, JavaInfo } from '../../shared/types'
+import type { Instance, JavaInfo, RemoteVersion } from '../../shared/types'
 import Select from '../components/Select'
 
 type PanelKey = 'info' | 'settings' | 'loader'
@@ -210,7 +210,7 @@ export default function Instances() {
   const [mcVersion, setMcVersion] = useState('')
   const [loader, setLoader] = useState('vanilla')
   const [loaderVersion, setLoaderVersion] = useState('')
-  const [remote, setRemote] = useState<{ id: string; type: string }[]>([])
+  const [remote, setRemote] = useState<RemoteVersion[]>([])
   const [loaders, setLoaders] = useState<{ value: string; label: string }[]>([])
   const [loaderLoading, setLoaderLoading] = useState(false)
   const [loaderErr, setLoaderErr] = useState('')
@@ -365,7 +365,7 @@ export default function Instances() {
               <Select
                 value={mcVersion}
                 width="100%"
-                options={remote.map((v) => ({ value: v.id, label: `${v.id}（${v.type}）` }))}
+                options={remote.map((v) => ({ value: v.id, label: `${v.id}（${versionTypeLabel(v)}）` }))}
                 onChange={setMcVersion}
                 placeholder="选游戏版本"
               />

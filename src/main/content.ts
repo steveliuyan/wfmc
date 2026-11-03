@@ -1,6 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { ContentItem, ContentKind, CrashReport, Instance, ModMeta } from '../shared/types'
+import type {
+  ContentItem,
+  ContentKind,
+  CrashReport,
+  Instance,
+  ModMeta,
+  RestoreBackupResult,
+  SaveBackup
+} from '../shared/types'
 import { store } from './store'
 import {
   zipDirectory,
@@ -12,6 +20,8 @@ import {
 } from './zip'
 import { gamePathFor } from './paths'
 import { disableResourcePack } from './options'
+import { createBackup, listBackups, pruneBackups, restoreBackup } from './savebackup'
+import { DiskCache } from './metacache'
 
 /** 内容所在的游戏数据目录（受「版本隔离」影响） */
 function instanceRoot(instanceId: string) {
@@ -55,7 +65,24 @@ function readFolder(dir: string): ContentItem[] {
  * jar / zip 元数据：把每个模组的名字、简介、图标读出来（内容管理里显示缩略图）
  * ------------------------------------------------------------------ */
 
-const metaCache = new Map<string, ModMeta>()
+/**
+ * jar 元数据缓存：内存 + data/cache/jar-meta.json（几百个 mod 的整合包冷启动不用再拆一遍压缩包）。
+ * 键是「路径|修改时间|启用状态」，jar 一换就自然失效。
+ */
+let jarMetaCache: DiskCache<ModMeta> | undefined
+function metaCache(): DiskCache<ModMeta> {
+  if (!jarMetaCache) jarMetaCache = new DiskCache<ModMeta>(path.join(store.dataDir, 'cache', 'jar-meta.json'))
+  return jarMetaCache
+}
+
+/** 退出前把元数据缓存写盘（攒的那些还没来得及落盘） */
+export function flushMetaCache(): void {
+  try {
+    jarMetaCache?.flush()
+  } catch {
+    /* 缓存写不进去不影响退出 */
+  }
+}
 
 function iconCacheDir(): string {
   const dir = path.join(store.dataDir, 'cache', 'icons')
@@ -82,7 +109,7 @@ function safeName(s: string): string {
 /** 从 jar 里读 fabric.mod.json / mods.toml / quilt.mod.json */
 function readJarMeta(jarPath: string, stamp: string): ModMeta {
   const key = `${jarPath}|${stamp}`
-  const cached = metaCache.get(key)
+  const cached = metaCache().get(key)
   if (cached) return cached
   const meta: ModMeta = {}
   let buf: Buffer
@@ -92,7 +119,7 @@ function readJarMeta(jarPath: string, stamp: string): ModMeta {
     buf = z.buf
     entries = z.entries
   } catch {
-    metaCache.set(key, meta)
+    metaCache().set(key, meta)
     return meta
   }
 
@@ -139,7 +166,7 @@ function readJarMeta(jarPath: string, stamp: string): ModMeta {
         readBinary('icon.png') ??
         (j.id ? readBinary(`assets/${j.id}/icon.png`) : undefined)
       if (icon) meta.iconPath = saveIcon(safeName(`${path.basename(jarPath)}-${stamp}`), icon)
-      metaCache.set(key, meta)
+      metaCache().set(key, meta)
       return meta
     } catch {
       /* 元数据坏了就当没有 */
@@ -163,7 +190,7 @@ function readJarMeta(jarPath: string, stamp: string): ModMeta {
       readBinary('icon.png') ??
       readBinary('logo.png')
     if (icon) meta.iconPath = saveIcon(safeName(`${path.basename(jarPath)}-${stamp}`), icon)
-    metaCache.set(key, meta)
+    metaCache().set(key, meta)
     return meta
   }
 
@@ -187,7 +214,7 @@ function readJarMeta(jarPath: string, stamp: string): ModMeta {
     if (png) meta.iconPath = saveIcon(safeName(`${path.basename(jarPath)}-${stamp}`), png)
   }
 
-  metaCache.set(key, meta)
+  metaCache().set(key, meta)
   return meta
 }
 
@@ -276,14 +303,29 @@ export function contentDir(instanceId: string, kind: ContentKind): string {
 /** 备份存档目录成 zip，返回备份文件路径 */
 export function backupSaves(instanceId: string): string | undefined {
   const root = instanceRoot(instanceId)
-  const savesDir = path.join(root, 'saves')
-  if (!fs.existsSync(savesDir)) return undefined
-  const stamp = new Date()
-    .toLocaleString('zh-CN', { hour12: false })
-    .replace(/[/:\s]/g, '-')
-  const out = path.join(store.backupsDir, `${instanceId}-saves-${stamp}.zip`)
-  const count = zipDirectory(savesDir, out)
-  return count > 0 ? out : undefined
+  return createBackup(path.join(root, 'saves'), store.backupsDir, instanceId)
+}
+
+/** 列出这个实例的存档快照（新的在前） */
+export function listSaveBackups(instanceId: string): SaveBackup[] {
+  return listBackups(store.backupsDir, instanceId)
+}
+
+/** 只保留最近 keep 份快照 */
+export function pruneSaveBackups(instanceId: string, keep = 12): number {
+  return pruneBackups(store.backupsDir, instanceId, keep)
+}
+
+/**
+ * 回滚到某个快照：先把当前存档再打一份「回滚前」的后悔药，再把快照覆盖写回。
+ * 覆盖不清空 —— 快照里没有的存档保持原样，不会误删新世界。
+ */
+export function restoreSaveBackup(instanceId: string, backupFile: string): RestoreBackupResult {
+  const root = instanceRoot(instanceId)
+  const safetyBackup = backupSaves(instanceId)
+  const { restored, worlds } = restoreBackup(path.join(root, 'saves'), store.backupsDir, backupFile)
+  pruneSaveBackups(instanceId)
+  return { restored, safetyBackup, worlds }
 }
 
 /** 崩溃报告列表 */

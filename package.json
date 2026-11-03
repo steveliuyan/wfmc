@@ -1,7 +1,7 @@
 {
   "name": "wfmc",
   "productName": "WFMC",
-  "version": "1.0.37",
+  "version": "1.0.42",
   "description": "WFMC - WanFan Minecraft Launcher 游戏 / 整合包 / 模组 / 光影 下载与启动",
   "main": "dist/main/index.js",
   "author": "WanFan Technology",
@@ -17,6 +17,7 @@
     "dist": "npm run build && electron-builder --win --x64",
     "dist:portable": "npm run build && electron-builder --win portable --x64",
     "dist:setup": "npm run build && electron-builder --win nsis --x64",
+    "delta": "node scripts/make-delta.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {
@@ -75,7 +76,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "WFMC",
-      "uninstallDisplayName": "WFMC - 万帆 Minecraft 启动器",
+      "uninstallDisplayName": "WFMC - 万凡 Minecraft 启动器",
       "artifactName": "WFMC-Setup-${version}.exe",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",

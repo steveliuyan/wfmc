@@ -2,6 +2,7 @@ import { app, safeStorage } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { Account, Instance, Settings } from '../shared/types'
+import { migrateSettings } from './config-migrate'
 
 const ENC_PREFIX = 'enc:'
 
@@ -42,7 +43,7 @@ function defaultSettings(): Settings {
     dataDir: defaultDataDir(),
     theme: 'light',
     downloadSource: 'mirror',
-    downloadThreads: 48,
+    downloadThreads: 32,
     downloadLimitKbps: 0,
     downloadDir: '',
     maxConcurrentDownloads: 8,
@@ -281,12 +282,12 @@ class Store {
     }
     // 数据继承：装了新版本 / 便携版跟安装版换来换去之后，别让玩家看到「数据全没了」
     if (adoptExistingData(this._settings)) corrected = true
-    // 老配置里的「自动测速」经常测到官方源，国内下起来又慢又断；统一迁到国内镜像
-    if (!this._settings.mirrorMigrated) {
-      if (this._settings.downloadSource === 'auto') this._settings.downloadSource = 'mirror'
-      this._settings.mirrorMigrated = true
-      corrected = true
+    // 老配置里的各种兼容补丁：统一走 config-migrate 的有序迁移（见 src/main/config-migrate.ts）
+    const mig = migrateSettings(this._settings)
+    if (mig.applied.length > 0) {
+      console.log(`[settings] 配置迁移 v${mig.from} → v${mig.to}：${mig.applied.join('；')}`)
     }
+    if (mig.changed) corrected = true
     // 首次运行也把默认值落盘，方便用户直接看/改文件
     writeJson(this.settingsFile, this._settings)
     const raw = readJson<{ accounts: Account[] }>(this.accountsFile, { accounts: [] })

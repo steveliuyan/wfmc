@@ -67,6 +67,10 @@ export interface Settings {
   favResources?: FavResource[]
   /** 把老的「自动测速」一次性迁到国内镜像，迁过就不再动 */
   mirrorMigrated?: boolean
+  /** 配置结构版本：由 config-migrate.ts 维护，启动时按版本号依次升级 */
+  configVersion?: number
+  /** 启动前自动备份存档（默认开）—— 存档回滚的后悔药全靠它 */
+  autoBackupSaves?: boolean
   /** 首页下面几块卡片的排列顺序（自己拖着改的） */
   homeLayout?: string[]
 }
@@ -189,6 +193,8 @@ export interface RemoteVersion {
   type: 'release' | 'snapshot' | 'old_beta' | 'old_alpha' | string
   releaseTime: string
   url: string
+  /** 愚人节版本（官方清单里算 snapshot，只能靠 id 认出来） */
+  aprilFools?: boolean
 }
 
 export interface LoaderOption {
@@ -315,6 +321,11 @@ export interface CrashReport {
 export interface ProgressPayload {
   key: string
   phase: string
+
+  /** 已完成的字节数（带上它，界面就按字节算百分比，比文件个数平滑得多） */
+  bytes?: number
+  /** 这次一共要下多少字节（0 表示不知道） */
+  totalBytes?: number
   current?: number
   total?: number
   detail?: string
@@ -389,4 +400,67 @@ export interface WorldRestoreResult {
   /** 目标目录已存在同名存档时自动改名了 */
   renamed: boolean
   check: WorldPackCheck
+}
+
+/** 一份存档快照（备份目录里的 zip） */
+export interface SaveBackup {
+  /** 绝对路径 */
+  file: string
+  /** 文件名（带时间戳） */
+  name: string
+  bytes: number
+  time: number
+}
+
+/** 回滚结果 */
+export interface RestoreBackupResult {
+  /** 写回的文件数 */
+  restored: number
+  /** 回滚前自动留的那份「后悔药」，没有当前存档时为 undefined */
+  safetyBackup?: string
+  /** 这次回滚涉及的存档目录名 */
+  worlds: string[]
+}
+
+/** 数据目录里一块的占用（存储管理用） */
+export interface UsageItem {
+  key: string
+  label: string
+  path: string
+  bytes: number
+  files: number
+  /** 能不能一键清掉（只有下载 / 缓存 / 日志可以） */
+  cleanable: boolean
+  hint?: string
+  /** 是否已经算进总计（日志算在实例里，不重复加） */
+  inTotal: boolean
+}
+
+export interface DiskUsage {
+  dir: string
+  total: { bytes: number; files: number }
+  items: UsageItem[]
+  partial: boolean
+}
+
+export interface CleanResult {
+  files: number
+  bytes: number
+}
+
+/** Ctrl+K 全局搜索的一条结果（本地索引，见 main/search.ts） */
+export type SearchGroup = '实例' | '模组' | '资源包' | '光影' | '存档' | '服务器'
+
+export interface SearchHit {
+  group: SearchGroup
+  /** 显示标题：模组用文件名去掉 .jar */
+  title: string
+  /** 右侧小字：实例 · 大小、版本 · 加载器、地址… */
+  subtitle?: string
+  /** 点开去哪个页面 */
+  page: 'home' | 'manage' | 'servers' | 'download' | 'settings' | 'hosting' | 'online' | 'skin' | 'instances' | 'resources'
+  /** 内容类命中：属于哪个实例 */
+  instanceId?: string
+  /** 内容类命中：内容管理里哪个 tab */
+  tab?: 'mods' | 'resourcepacks' | 'shaderpacks' | 'saves'
 }

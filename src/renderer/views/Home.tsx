@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import lottie from 'lottie-web'
-import { api, friendlyError, formatDuration, formatLastPlayed, formatSize } from '../api'
+import { api, friendlyError, formatDuration, formatLastPlayed, formatSize, progressPercent, progressText } from '../api'
 import { useLauncher, useT } from '../store'
 import symbolAnim from '../assets/lottie-symbol.json'
 import type { PageId } from '../App'
@@ -667,13 +667,13 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
           <div className="card">
             <h3>进行中</h3>
             {activeProgress.map((p, idx) => {
-              const pct = p.total ? Math.min(100, Math.round(((p.current ?? 0) / p.total) * 100)) : 0
+              const pct = progressPercent(p)
               return (
                 <div className="progress-row" key={idx}>
                   <div className="progress-label">
                     <span>{p.phase}</span>
                     <span className="muted">
-                      {p.current ?? 0}/{p.total ?? 0}
+                      {progressText(p)}
                     </span>
                   </div>
                   <div className="bar">

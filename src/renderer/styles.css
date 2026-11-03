@@ -18,6 +18,13 @@
   --shadow: 0 6px 24px rgba(30, 40, 90, 0.08);
   --shadow-lg: 0 16px 48px rgba(30, 40, 90, 0.14);
   --radius: 16px;
+  /* 主色系派生值（未自定义主色时的默认：按 accent 走 LAB 派生得同款结果） */
+  --accent-soft: rgba(55, 47, 162, 0.13);
+  --accent-ring: rgba(55, 47, 162, 0.26);
+  --accent-ink: #ffffff;
+  --accent-glow: rgba(55, 47, 162, 0.22);
+  /* 壁纸模糊半径（由 renderer/adaptive.ts 按实测帧时间调） */
+  --wall-blur: 18px;
 }
 
 :root[data-theme='dark'] {
@@ -37,6 +44,10 @@
   --ok: #29d3b5;
   --shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+  --accent-soft: rgba(123, 108, 255, 0.2);
+  --accent-ring: rgba(123, 108, 255, 0.34);
+  --accent-ink: #0f1117;
+  --accent-glow: rgba(123, 108, 255, 0.34);
 }
 
 * {
@@ -48,6 +59,59 @@ body,
 #root {
   height: 100%;
   margin: 0;
+}
+
+html {
+  background: var(--bg);
+  transition: background 0.25s ease;
+}
+
+/* 壁纸层：单独一层固定定位才好在不糊内容的前提下做模糊（直接 blur body 会把字一起糊掉）。
+   --wall 由 store.tsx 写入；--wall-blur 由 adaptive.ts 按实测帧时间调档。 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: -60px;
+  z-index: -2;
+  background: var(--wall, none) center / cover no-repeat;
+  filter: blur(var(--wall-blur, 18px)) saturate(1.1);
+  transform: scale(1.05);
+  opacity: 0;
+  transition: opacity 0.4s ease, filter 0.35s ease;
+  pointer-events: none;
+  will-change: filter;
+}
+
+/* 壁纸上压一层底色，保证不缩卡片的文字也读得清 */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--bg) 68%, transparent);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+
+body.has-wall::before,
+body.has-wall::after {
+  opacity: 1;
+}
+
+body.has-wall {
+  background: transparent;
+}
+
+/* 有壁纸时卡片/侧栏半透明 + 背后取样模糊，视觉上「浮」在壁纸上 */
+body.has-wall .card,
+body.has-wall .sidebar {
+  background: color-mix(in srgb, var(--bg-2) 76%, transparent);
+  backdrop-filter: blur(10px) saturate(1.05);
+}
+
+body.has-wall .card.inner {
+  background: color-mix(in srgb, var(--bg-3) 72%, transparent);
 }
 
 body {
@@ -81,7 +145,7 @@ select {
 input:focus,
 select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: 0 0 0 3px var(--accent-ring, color-mix(in srgb, var(--accent) 16%, transparent));
 }
 
 a {
@@ -394,6 +458,33 @@ nav {
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: none; }
+}
+
+/* 切页方向：往下点的页面从左进、往上点的从右进，跟导航的上下顺序一致 */
+.main.nav-fwd .page {
+  animation: pageInRight 0.3s cubic-bezier(0.22, 0.8, 0.3, 1);
+}
+
+.main.nav-back .page {
+  animation: pageInLeft 0.3s cubic-bezier(0.22, 0.8, 0.3, 1);
+}
+
+@keyframes pageInRight {
+  from { opacity: 0; transform: translateX(22px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes pageInLeft {
+  from { opacity: 0; transform: translateX(-22px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page,
+  .main.nav-fwd .page,
+  .main.nav-back .page {
+    animation: none;
+  }
 }
 
 .page-head {
@@ -769,7 +860,25 @@ label.full {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 4px;
-  flex-wrap: wrap;
+  /* 分栏条永远一行：不被左边的标题/说明挤成两行（4 个分栏时尤其明显） */
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  height: 0;
+}
+
+.tabs button {
+  white-space: nowrap;
+}
+
+/* 页头左边的标题+说明可以换行收缩，别去挤右边的分栏条 */
+.page-head > div:first-child {
+  min-width: 0;
 }
 
 .tabs button {
@@ -1571,6 +1680,60 @@ label.full {
   margin: 3px 0 5px;
 }
 
+/* ---- 任务树（父子步骤） ---- */
+.task-title .ellipsis {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-fold {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.16s ease;
+}
+
+.task-fold.open {
+  transform: rotate(90deg);
+}
+
+.task-branch {
+  width: 6px;
+  border-left: 1px solid var(--line);
+  align-self: stretch;
+  margin-left: 2px;
+}
+
+.task-count {
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bg-2);
+}
+
+.task-children {
+  margin: 2px 0 0 12px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+
+.task-children .task-item {
+  padding: 5px 0;
+}
+
+.task-children .task-title {
+  font-size: 12px;
+}
+
+.task-node.depth-1 .task-sub,
+.task-node.depth-2 .task-sub {
+  font-size: 11.5px;
+}
+
 .server-icon {
   width: 26px;
   height: 26px;
@@ -1748,6 +1911,31 @@ label.full {
 .swatch:hover {
   transform: scale(1.12);
   border-color: var(--line);
+}
+
+/* 主色 LAB 派生预览：一眼看清「这一个主色会带出哪几个色」 */
+.accent-derived {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px 4px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: default;
+}
+
+.accent-chip {
+  width: 16px;
+  height: 16px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  transition: transform 0.15s ease;
+}
+
+.accent-derived:hover .accent-chip {
+  transform: translateY(-1px);
 }
 
 /* ============ 音乐播放器 ============ */
@@ -2376,7 +2564,7 @@ textarea:focus {
 
 .search-clear:hover {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink, #fff);
   transform: scale(1.08);
 }
 
@@ -2579,7 +2767,7 @@ textarea:focus {
   padding: 3px 9px;
   border-radius: 999px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink, #fff);
   margin-bottom: 8px;
 }
 
@@ -2617,6 +2805,12 @@ textarea:focus {
 
 .upd-pre {
   color: var(--warn, #b8731a);
+}
+
+/* 增量更新提示：只下载差异部分 */
+.upd-delta {
+  color: var(--ok, #2f8f4e);
+  font-weight: 600;
 }
 
 .upd-hero-actions {
@@ -2843,7 +3037,7 @@ textarea:focus {
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 0 0 3px var(--accent-ring, color-mix(in srgb, var(--accent) 22%, transparent));
 }
 
 .update-banner-body {
@@ -3270,7 +3464,7 @@ textarea:focus {
 .btn.seg.on {
   background: var(--accent);
   border-color: transparent;
-  color: #fff;
+  color: var(--accent-ink, #fff);
   box-shadow: 0 6px 16px -8px var(--accent);
 }
 .btn.seg.on .chev { opacity: .95; transform: rotate(180deg); }
@@ -3786,4 +3980,94 @@ textarea:focus {
 [data-theme='dark'] input[type='number']::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+
+/* ============ 存档快照（回滚）面板 ============ */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.toolbar .spacer { flex: 1; }
+
+/* 设置 → 占用明细 */
+.usage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.usage-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-soft);
+}
+
+.usage-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.usage-label {
+  min-width: 132px;
+  font-weight: 600;
+}
+
+.usage-size {
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-head .btn {
+  margin-left: auto;
+}
+
+.usage-hint {
+  line-height: 1.45;
+}
+
+/* ============ Ctrl+K 全局搜索：分组 / 选中 / 底栏 ============ */
+.palette-group {
+  padding: 10px 12px 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.palette-item.active {
+  background: var(--bg-3);
+  box-shadow: inset 2px 0 0 var(--accent, #6b8afd);
+}
+
+.palette-item b {
+  color: var(--accent, #6b8afd);
+  font-weight: 700;
+}
+
+.palette-item .p-sub {
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--muted);
 }
