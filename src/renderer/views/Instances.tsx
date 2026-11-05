@@ -220,6 +220,8 @@ export default function Instances() {
   const [javas, setJavas] = useState<JavaInfo[]>([])
   const [presets, setPresets] = useState<{ id: string; name: string; desc: string; memoryMb: number }[]>([])
   const [packInfo, setPackInfo] = useState('')
+  // 有没有可升级的整合包新版本（决定要不要显示「就地升级」按钮）
+  const [packUpdatable, setPackUpdatable] = useState(false)
   // 卡片里的折叠面板：一次只开一个，收起/展开都有动画
   const [openPanel, setOpenPanel] = useState<{ id: string; key: PanelKey }>()
   const [visiblePanel, setVisiblePanel] = useState<{ id: string; key: PanelKey }>()
@@ -685,6 +687,7 @@ export default function Instances() {
                         try {
                           const res = await api.checkPackUpdate(i.id)
                           setPackInfo(`${res.note}${res.latestVersion ? `（本地 ${res.currentVersion ?? '?'} → 最新 ${res.latestVersion}）` : ''}`)
+                          setPackUpdatable(!!res.hasUpdate && !!res.downloadUrl)
                           toast(res.note, res.hasUpdate ? 'success' : 'info')
                         } catch (e) {
                           toast(`检查失败：${friendlyError(e)}`, 'error')
@@ -693,6 +696,44 @@ export default function Instances() {
                     >
                       检查整合包更新
                     </button>
+                    {packUpdatable && (
+                      <button
+                        className="btn sm primary"
+                        title="只更新整合包内容，你改过的配置 / 键位 / 存档都会保留"
+                        onClick={async () => {
+                          if (
+                            !(await askConfirm({
+                              title: '升级整合包',
+                              message:
+                                '就地升级到新版本？\n\n· 你改过的配置会保留，新版文件放在同目录的 .packnew 里可以对比\n· 被你删掉、但你动过的文件不会被删\n· 存档不会动，但为防万一建议先备份',
+                              okText: '升级'
+                            }))
+                          ) {
+                            return
+                          }
+                          try {
+                            const r = await api.upgradePack(i.id)
+                            if (!r.hasUpdate) return toast(r.note, 'info')
+                            setPackInfo(r.note)
+                            setPackUpdatable(false)
+                            toast(r.note, 'success')
+                            if (r.keptModified.length > 0) {
+                              toast(
+                                `这些文件你改过，已保留本地版本：${r.keptModified.slice(0, 3).join('、')}${
+                                  r.keptModified.length > 3 ? ` 等 ${r.keptModified.length} 个` : ''
+                                }`,
+                                'info'
+                              )
+                            }
+                            await fetchDetail(i.id)
+                          } catch (e) {
+                            toast(`升级失败：${friendlyError(e)}`, 'error')
+                          }
+                        }}
+                      >
+                        就地升级（保留你的配置）
+                      </button>
+                    )}
                     {packInfo && <span className="muted small">{packInfo}</span>}
                     <button
                       className="btn sm"

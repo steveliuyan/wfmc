@@ -209,6 +209,8 @@ export interface ModIssue {
   level: 'error' | 'warn' | 'info'
   title: string
   detail: string
+  /** 「这是什么」：这条问题什么意思、会有什么症状、能不能不管 */
+  explain?: string
   files?: string[]
   fixLoader?: 'fabric' | 'forge' | 'neoforge' | 'quilt'
   /** 缺的前置 modid，可直接一键装 */
@@ -357,6 +359,15 @@ export const api = {
   saveBackups: (instanceId: string) => call<SaveBackup[]>('saves:backups', instanceId),
   restoreSaveBackup: (instanceId: string, file: string) =>
     call<RestoreBackupResult>('saves:restore-backup', instanceId, file),
+  /** 手动把当前 mods 整目录打个快照 */
+  backupMods: (instanceId: string) => call<string | undefined>('mods:backup', instanceId),
+  modsBackups: (instanceId: string) =>
+    call<{ file: string; name: string; bytes: number; time: number; count: number; partial: boolean }[]>(
+      'mods:backups',
+      instanceId
+    ),
+  restoreModsBackup: (instanceId: string, file: string) =>
+    call<{ restored: number; removed: number; safetyBackup?: string }>('mods:restore-backup', instanceId, file),
   crashReports: (instanceId: string) => call<CrashReport[]>('crash:list', instanceId),
   readCrashReport: (instanceId: string, target: string) => call<string>('crash:read', instanceId, target),
   diagnose: (instanceId: string) => call<CrashDiagnosis | undefined>('crash:diagnose', instanceId),
@@ -575,6 +586,17 @@ export const api = {
       downloadUrl?: string
       note: string
     }>('modpack:check-update', instanceId),
+  /** 就地升级整合包（保留你改过的配置） */
+  upgradePack: (instanceId: string) =>
+    call<{
+      hasUpdate: boolean
+      added: number
+      updated: number
+      removed: number
+      keptModified: string[]
+      backedUp: number
+      note: string
+    }>('modpack:upgrade', instanceId),
 
   // ---- 资源包排序 / 诊断包 / 测速 ----
   packOrder: (instanceId: string) => call<string[]>('content:pack-order', instanceId),
@@ -618,13 +640,17 @@ export const api = {
       'mods:diagnose',
       instanceId
     ),
-  /** 一键补前置：给一串 modid，自动去 Modrinth 找对应项目并装（连带它自己的前置） */
-  fixModDeps: (instanceId: string, modids: string[]) =>
+  /** 一键补前置：给一串 modid，自动去 Modrinth 找对应项目并装（连带它自己的前置） */  fixModDeps: (instanceId: string, modids: string[]) =>
     call<{
       items: { modid: string; projectId?: string; title?: string; status: 'installed' | 'skipped' | 'failed'; detail?: string }[]
       installed: string[]
       failed: number
     }>('mods:fix-deps', instanceId, modids),
+  /** 体检常驻：开始盯这个实例的 mods 目录（结果通过 onModsDiagnosis 推过来） */
+  startModWatch: (instanceId: string) => call<boolean>('mods:watch-start', instanceId),
+  stopModWatch: () => call<boolean>('mods:watch-stop'),
+  onModsDiagnosis: (cb: (p: { instanceId: string; issues: ModIssue[]; activeCount: number; at: number }) => void) =>
+    bridge.on('event:mods-diagnosis', cb),
   exportMrpack: (instanceId: string) => call<string>('modpack:export-mrpack', instanceId),  inspectMrpack: (file: string) =>
     call<{ name?: string; versionId?: string; files: number; deps?: Record<string, string> }>('modpack:inspect', file),
 

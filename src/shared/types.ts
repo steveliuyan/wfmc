@@ -73,6 +73,8 @@ export interface Settings {
   configVersion?: number
   /** 启动前自动备份存档（默认开）—— 存档回滚的后悔药全靠它 */
   autoBackupSaves?: boolean
+  /** 启动前跑一遍模组体检，有 error 级问题（重复 mod / 加载器不匹配 / 前置被禁用）就先拦一下（默认开） */
+  launchCheckMods?: boolean
   /** 首页下面几块卡片的排列顺序（自己拖着改的） */
   homeLayout?: string[]
 }

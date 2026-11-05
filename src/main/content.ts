@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import type {
   ContentItem,
@@ -19,8 +20,16 @@ import {
   collectDirFiles
 } from './zip'
 import { gamePathFor } from './paths'
+import { diagnoseMods } from './moddoctor'
 import { disableResourcePack } from './options'
 import { createBackup, listBackups, pruneBackups, restoreBackup } from './savebackup'
+import {
+  createModsBackup,
+  listModsBackups,
+  pruneModsBackups,
+  restoreModsBackup,
+  type ModsBackupItem
+} from './modbackup'
 import { DiskCache } from './metacache'
 
 /** 内容所在的游戏数据目录（受「版本隔离」影响） */
@@ -328,8 +337,40 @@ export function restoreSaveBackup(instanceId: string, backupFile: string): Resto
   return { restored, safetyBackup, worlds }
 }
 
-/** 崩溃报告列表 */
-export function listCrashReports(instanceId: string): CrashReport[] {
+/**
+ * 备份整个 mods 目录（折腾模组之前的后悔药）。
+ * jar 本来就压过，这里是 store 模式直接打包，几个 G 也只花几秒。
+ */
+export function backupMods(instanceId: string): string | undefined {
+  const root = instanceRoot(instanceId)
+  const out = createModsBackup(path.join(root, 'mods'), store.backupsDir, instanceId, {
+    note: '手动备份'
+  })
+  pruneModsBackups(store.backupsDir, instanceId)
+  return out
+}
+
+/** 列出这个实例的 mods 快照（新的在前） */
+export function listModsBackupFiles(instanceId: string): ModsBackupItem[] {
+  return listModsBackups(store.backupsDir, instanceId)
+}
+
+/**
+ * 回滚到某个 mods 快照：先给当前状态打一份（回滚本身也能后悔），再覆盖写回。
+ */
+export function restoreModsBackupSnapshot(
+  instanceId: string,
+  backupFile: string
+): { restored: number; removed: number; safetyBackup?: string } {
+  const root = instanceRoot(instanceId)
+  const modsDir = path.join(root, 'mods')
+  const safetyBackup = createModsBackup(modsDir, store.backupsDir, instanceId, { note: '回滚前自动' })
+  const res = restoreModsBackup(modsDir, store.backupsDir, backupFile)
+  pruneModsBackups(store.backupsDir, instanceId)
+  return { ...res, safetyBackup }
+}
+
+/** 崩溃报告列表 */export function listCrashReports(instanceId: string): CrashReport[] {
   const root = instanceRoot(instanceId)
   const dir = path.join(root, 'crash-reports')
   try {
@@ -473,56 +514,125 @@ function writeResourcePackOrder(root: string, order: string[]) {
  * 一键导出诊断包（给作者/朋友排查）
  * ------------------------------------------------------------------ */
 
+/** 把一段文本里的敏感串换掉（路径、账号名） */
+function scrubText(text: string, subs: [string, string][]): string {
+  let out = text
+  for (const [from, to] of subs) {
+    if (!from || from.length < 3) continue
+    out = out.split(from).join(to)
+    // Windows 日志里路径的反斜杠偶尔会成转义形式
+    const alt = from.replace(/\\/g, '/')
+    if (alt !== from) out = out.split(alt).join(to)
+  }
+  return out
+}
+
+const TEXT_LIKE = /\.(log|txt|json|json5|toml|ya?ml|cfg|conf|properties|ini|md)$/i
+
 export function exportDiagnostics(instanceId: string): string {
   const instance = store.getInstance(instanceId)
   if (!instance) throw new Error('实例不存在')
   const root = instanceRoot(instanceId)
   const files: { name: string; full: string }[] = []
 
-  const candidates = [
-    ['logs/latest.log', path.join(root, 'logs', 'latest.log')],
-    ['logs/debug.log', path.join(root, 'logs', 'debug.log')],
-    ['instance.json', path.join(store.instanceDir(instanceId), 'instance.json')]
-  ] as [string, string][]
-  for (const [name, full] of candidates) if (fs.existsSync(full)) files.push({ name, full })
+  // 脱敏表：数据目录 / 实例目录 / 用户目录 / 账号名都换成占位符，发出去不泄露路径和人名
+  const subs: [string, string][] = [
+    [root, '<实例目录>'],
+    [store.instanceDir(instanceId), '<实例配置目录>'],
+    [store.dataDir, '<数据目录>'],
+    [os.homedir(), '<用户目录>']
+  ]
+  for (const acc of store.accounts ?? []) {
+    if (acc.name) subs.push([acc.name, '<玩家名>'])
+    if ((acc as { uuid?: string }).uuid) subs.push([(acc as { uuid?: string }).uuid!, '<UUID>'])
+  }
+
+  const tmpDir = path.join(store.dataDir, 'temp', `diag-${instanceId}`)
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+  fs.mkdirSync(tmpDir, { recursive: true })
+
+  /** 文本类文件读出来脱敏后写临时文件，二进制直接复制 */
+  const addFile = (zipName: string, full: string) => {
+    if (!fs.existsSync(full)) return
+    if (TEXT_LIKE.test(zipName)) {
+      try {
+        const scrubbed = scrubText(fs.readFileSync(full, 'utf-8'), subs)
+        const tmp = path.join(tmpDir, zipName.replace(/[/\\]/g, '_'))
+        fs.writeFileSync(tmp, scrubbed, 'utf-8')
+        files.push({ name: zipName, full: tmp })
+        return
+      } catch {
+        /* 读不了就按原样带上 */
+      }
+    }
+    files.push({ name: zipName, full })
+  }
+
+  addFile('logs/latest.log', path.join(root, 'logs', 'latest.log'))
+  addFile('logs/debug.log', path.join(root, 'logs', 'debug.log'))
+  addFile('instance.json', path.join(store.instanceDir(instanceId), 'instance.json'))
 
   const crashDir = path.join(root, 'crash-reports')
   if (fs.existsSync(crashDir)) {
     for (const f of collectDirFiles(crashDir).slice(-10)) {
-      files.push({ name: `crash-reports/${f.name}`, full: f.full })
+      addFile(`crash-reports/${f.name}`, f.full)
     }
   }
 
   // 启动器自己的错误日志也一起带上
-  const errFile = path.join(store.dataDir, 'logs', 'errors.log')
-  if (fs.existsSync(errFile)) files.push({ name: 'launcher-errors.log', full: errFile })
+  addFile('launcher-errors.log', path.join(store.dataDir, 'logs', 'errors.log'))
 
-  // mod 清单（从 mods 目录文件名 + 体检结果）
+  // mod 清单 + 体检结果
   const modsDir = path.join(root, 'mods')
-  const modList = fs.existsSync(modsDir) ? fs.readdirSync(modsDir).filter((n) => n.endsWith('.jar')) : []
+  const modList = fs.existsSync(modsDir)
+    ? fs.readdirSync(modsDir).filter((n) => n.toLowerCase().endsWith('.jar') || n.toLowerCase().endsWith('.jar.disabled'))
+    : []
+  let diagLines: string[] = []
+  try {
+    const res = diagnoseMods(instanceId)
+    const active = res.mods.filter((m) => !m.disabled).length
+    diagLines = [
+      '',
+      `体检（启用 ${active} 个，共 ${res.mods.length} 个文件）：`,
+      ...res.issues.map((x) => `  [${x.level}] ${x.title} —— ${x.detail}`)
+    ]
+  } catch {
+    diagLines = ['', '体检：未跑成功（不影响其它信息）']
+  }
+
+  const totalMem = Math.round(os.totalmem() / 1024 ** 3)
   const summary = [
     `WFMC 诊断包`,
     `生成时间: ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
     `实例: ${instance.name} (${instance.id})`,
     `版本: ${instance.mcVersion} / ${instance.loader} ${instance.loaderVersion ?? ''}`,
     `启动版本 ID: ${instance.versionId ?? instance.mcVersion}`,
-    `内存: ${instance.maxMemory ?? '默认'}MB`,
+    `内存: ${instance.maxMemory ?? '默认'}MB（最小 ${instance.minMemory ?? '-'}MB）`,
     `隔离: ${instance.isolate ? '开' : '关'}`,
     `JVM 参数: ${(instance.extraJvmArgs ?? []).join(' ') || '无'}`,
     '',
-    `mods (${modList.length}):`,
+    `系统: ${os.type()} ${os.release()} ${os.arch()}`,
+    `CPU: ${os.cpus()[0]?.model ?? '未知'} × ${os.cpus().length}`,
+    `物理内存: ${totalMem} GB`,
+    `Node / Electron 运行时: ${process.versions.node} / ${process.versions.electron ?? '-'}`,
+    ...diagLines,
+    '',
+    `mods 文件（${modList.length}）:`,
     ...modList.map((m) => `  - ${m}`)
   ].join('\n')
-  const summaryFile = path.join(store.dataDir, 'temp', `diag-${instanceId}.txt`)
-  fs.mkdirSync(path.dirname(summaryFile), { recursive: true })
-  fs.writeFileSync(summaryFile, summary, 'utf-8')
+  const summaryFile = path.join(tmpDir, '概要.txt')
+  fs.writeFileSync(
+    summaryFile,
+    scrubText(summary, subs.filter(([from]) => from !== store.dataDir)),
+    'utf-8'
+  )
   files.push({ name: '概要.txt', full: summaryFile })
 
   const stamp = new Date().toLocaleString('zh-CN', { hour12: false }).replace(/[/:\s]/g, '-')
   const out = path.join(store.exportsDir, `诊断包-${instance.name}-${stamp}.zip`)
   fs.mkdirSync(store.exportsDir, { recursive: true })
   writeZip(out, files)
-  fs.rmSync(summaryFile, { force: true })
+  fs.rmSync(tmpDir, { recursive: true, force: true })
   return out
 }
 

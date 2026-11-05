@@ -7,6 +7,7 @@ export type EventChannel =
   | 'event:host-log'
   | 'event:host-exit'
   | 'event:task'
+  | 'event:mods-diagnosis'
 
 const api = {
   invoke: <T = unknown>(channel: string, ...args: unknown[]): Promise<T> =>

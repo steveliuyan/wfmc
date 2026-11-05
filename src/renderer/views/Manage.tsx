@@ -33,12 +33,10 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
   const [updates, setUpdates] = useState<ModUpdateItem[]>([])
   const [shots, setShots] = useState<{ name: string; path: string; size: number; time: number }[]>([])
   const [modIssues, setModIssues] = useState<ModIssue[]>([])
-  // 体检结果 15 秒后自动收起，不占着页面
-  useEffect(() => {
-    if (modIssues.length === 0) return
-    const timer = setTimeout(() => setModIssues([]), 15_000)
-    return () => clearTimeout(timer)
-  }, [modIssues])
+  // 哪几条展开了「这是什么」的说明
+  const [explainOpen, setExplainOpen] = useState<Record<number, boolean>>({})
+  // 用户手动忽略了这一轮结果（mods 再变会重新弹出来）
+  const [diagDismissed, setDiagDismissed] = useState(false)
   const [packOrder, setPackOrder] = useState<string[]>([])
   const [langCov, setLangCov] = useState<{
     packs: { name: string; count: number }[]
@@ -46,9 +44,15 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     mods: { id: string; name: string; covered: boolean; selfChinese: boolean }[]
   }>()
   const [worlds, setWorlds] = useState<string[]>([])
+  // 汉化覆盖明细（154 个模组名字太长了，默认收起）
+  const [langDetailOpen, setLangDetailOpen] = useState(false)
   // 存档快照（回滚用）
   const [savesBackups, setSavesBackups] = useState<SaveBackup[]>([])
   const [showBackups, setShowBackups] = useState(false)
+  // 模组快照（更新/折腾前的后悔药）
+  const [modsBackups, setModsBackups] = useState<
+    { file: string; name: string; bytes: number; time: number; count: number; partial: boolean }[]
+  >([])
   const [packView, setPackView] = useState<{
     name: string
     size: number
@@ -69,6 +73,38 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
   // 目标实例：默认跟随左侧当前实例，但可以在这里直接换
   const target = instances.find((i) => i.id === targetId) ?? current
   const activeId = target?.id ?? currentId ?? ''
+
+  const refreshModsBackups = async (id = activeId) => {
+    if (!id) return
+    try {
+      setModsBackups(await api.modsBackups(id))
+    } catch {
+      setModsBackups([])
+    }
+  }
+
+  // 停在「模组」页时顺手把快照列表拉一下（更新后要立刻能看到新的那份）
+  useEffect(() => {
+    if (tab === 'mods') void refreshModsBackups()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, activeId])
+
+  // 体检常驻：切到这个实例就盯住它的 mods 目录，结果实时推过来（后台扫描有缓存，别怕慢）
+  useEffect(() => {
+    if (!activeId) return
+    let alive = true
+    const off = api.onModsDiagnosis((p) => {
+      if (!alive || p.instanceId !== activeId) return
+      setModIssues(p.issues)
+      setDiagDismissed(false)
+    })
+    api.startModWatch(activeId).catch(() => undefined)
+    return () => {
+      alive = false
+      off()
+      api.stopModWatch().catch(() => undefined)
+    }
+  }, [activeId])
   useEffect(() => {
     if (!targetId && currentId) setTargetId(currentId)
   }, [currentId, targetId])
@@ -213,39 +249,75 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
       {tab === 'mods' && langCov && (
         <div className="notice-bar">
           {langCov.packs.length > 0 ? (
-            <>
-              已装汉化包：<b>{langCov.packs.map((p) => `${p.name}（${p.count} 个模组）`).join(' + ')}</b>，
-              合计收录 <b>{langCov.coveredCount}</b> 个模组的中文。这里的 {langCov.mods.length} 个模组里：
-              {langCov.mods.filter((m) => m.covered || m.selfChinese).length > 0 && (
+            (() => {
+              const hasCn = langCov.mods.filter((m) => m.covered || m.selfChinese)
+              const noCn = langCov.mods.filter((m) => !m.covered && !m.selfChinese)
+              return (
                 <>
-                  {' '}
-                  <b className="ok-text">
-                    {langCov.mods
-                      .filter((m) => m.covered || m.selfChinese)
-                      .map((m) => m.name)
-                      .join('、')}
-                  </b>{' '}
-                  有中文；
+                  已装汉化包：
+                  <b>{langCov.packs.map((p) => `${p.name}（${p.count} 个模组）`).join(' + ')}</b>，
+                  合计收录 <b>{langCov.coveredCount}</b> 个模组的中文。这里的 {langCov.mods.length} 个模组里：
+                  {hasCn.length > 0 && (
+                    <>
+                      {' '}
+                      <b className="ok-text">{hasCn.length} 个有中文</b>
+                    </>
+                  )}
+                  {hasCn.length > 0 && noCn.length > 0 && '，'}
+                  {noCn.length > 0 && <b className="warn-text">{noCn.length} 个还没翻</b>}
+                  {noCn.length === 0 && hasCn.length > 0 && '，全都有中文了'}
+                  。
+                  {(hasCn.length > 0 || noCn.length > 0) && (
+                    <button
+                      className="btn sm"
+                      style={{ marginLeft: 8 }}
+                      onClick={() => setLangDetailOpen((v) => !v)}
+                    >
+                      {langDetailOpen ? '收起明细' : '看是哪些'}
+                    </button>
+                  )}
+                  {langDetailOpen && (
+                    <div style={{ marginTop: 10 }}>
+                      {hasCn.length > 0 && (
+                        <div style={{ marginBottom: noCn.length ? 12 : 0 }}>
+                          <div className="muted small" style={{ marginBottom: 6 }}>
+                            下面这些模组的界面已经是中文：
+                          </div>
+                          <div className="chips">
+                            {hasCn.map((m) => (
+                              <span key={m.id || m.name} className="chip" style={{ padding: '2px 10px' }}>
+                                {m.name}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {noCn.length > 0 && (
+                        <div>
+                          <div className="muted small" style={{ marginBottom: 6 }}>
+                            汉化包里没有它们的语言文件，界面还是英文——这类只能等汉化组收录，或者去找作者自己发布的中文语言文件塞进 jar：
+                          </div>
+                          <div className="chips">
+                            {noCn.map((m) => (
+                              <span
+                                key={m.id || m.name}
+                                className="chip warn-text"
+                                style={{ padding: '2px 10px' }}
+                              >
+                                {m.name}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="muted small" style={{ marginTop: 8 }}>
+                            另外：模组里直接写死的文字（比如标题栏那种）资源包也翻不了，那是作者代码里的字符串。
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </>
-              )}
-              {langCov.mods.filter((m) => !m.covered && !m.selfChinese).length > 0 ? (
-                <>
-                  {' '}
-                  <b className="warn-text">
-                    {langCov.mods
-                      .filter((m) => !m.covered && !m.selfChinese)
-                      .map((m) => m.name)
-                      .join('、')}
-                  </b>{' '}
-                  汉化包里没有它们的语言文件，界面还是英文——这类只能等汉化组收录，或者去找作者自己发布的中文语言文件塞进 jar。
-                  <span className="muted small">
-                    （另外：模组里直接写死的文字，比如标题栏那种，资源包也翻不了，那是作者代码里的字符串。）
-                  </span>
-                </>
-              ) : (
-                langCov.mods.length > 0 && <> 全部有中文了。</>
-              )}
-            </>
+              )
+            })()
           ) : (
             <>还没装汉化包。装模组后界面是英文的话，点上面的「装中文汉化包」。</>
           )}
@@ -356,22 +428,38 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                 try {
                   const res = await api.diagnoseMods(activeId)
                   setModIssues(res.issues)
-                  toast(`体检完成：扫描 ${res.mods.length} 个 mod`, 'success')
+                  setDiagDismissed(false)
+                  const bad = res.issues.filter((x) => x.level !== 'info').length
+                  toast(
+                    bad === 0 ? `体检通过：${res.mods.length} 个 mod 都没问题` : `体检完成：扫描 ${res.mods.length} 个 mod，${bad} 条要处理`,
+                    bad === 0 ? 'success' : 'error'
+                  )
                 } catch (e) {
                   toast(`体检失败：${(e as Error).message}`, 'error')
                 }
               }}
             >
-              体检模组（重复 / 加载器 / 前置）
+              {modIssues.length > 0 ? '重新体检' : '体检模组（重复 / 加载器 / 前置）'}
             </button>
-            <span className="muted small">读每个 jar 里的元数据，离线可跑。结果 15 秒后自己收起来</span>
+            <span className="muted small">
+              开着的时候会一直盯着 mods 目录，装/删模组后自动重扫；只读 jar 里的元数据，离线可跑
+            </span>
           </div>
-          {modIssues.length > 0 && (
+          {!diagDismissed && modIssues.length > 0 && (
             <div style={{ marginTop: 12 }}>
               <div className="row-between" style={{ border: 'none', marginBottom: 6 }}>
-                <span className="mini-label">体检结果（{modIssues.length}）</span>
-                <button className="btn sm ghost" onClick={() => setModIssues([])}>
-                  ✕ 收起
+                <span className="mini-label">
+                  {(() => {
+                    const e = modIssues.filter((x) => x.level === 'error').length
+                    const w = modIssues.filter((x) => x.level === 'warn').length
+                    const i = modIssues.filter((x) => x.level === 'info').length
+                    if (e > 0) return `体检结果：${e} 条会让游戏崩或模组失效，建议先处理`
+                    if (w > 0) return `体检结果：${w} 条可能让部分模组不好用（不影响启动）`
+                    return `体检结果：${i} 条提示，没有要处理的`
+                  })()}
+                </span>
+                <button className="btn sm ghost" onClick={() => setDiagDismissed(true)}>
+                  ✕ 忽略
                 </button>
               </div>
               {modIssues.map((issue, i) => (
@@ -381,8 +469,22 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                       {issue.level === 'error' ? '错误' : issue.level === 'warn' ? '警告' : '提示'}
                     </span>
                     {issue.title}
+                    {issue.explain && (
+                      <button
+                        className="btn sm ghost"
+                        style={{ marginLeft: 'auto' }}
+                        onClick={() => setExplainOpen((s) => ({ ...s, [i]: !s[i] }))}
+                      >
+                        {explainOpen[i] ? '收起说明' : '这是什么？'}
+                      </button>
+                    )}
                   </div>
                   <div className="diag-advice">{issue.detail}</div>
+                  {issue.explain && explainOpen[i] && (
+                    <div className="diag-advice" style={{ opacity: 0.85, borderLeft: '2px solid currentColor', paddingLeft: 8, marginTop: 6 }}>
+                      {issue.explain}
+                    </div>
+                  )}
                   {issue.fixDep && (
                     <div className="row wrap" style={{ marginTop: 8 }}>
                       <button
@@ -463,6 +565,85 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                   {issue.files && issue.files.length > 0 && (
                     <code className="diag-evidence">{issue.files.slice(0, 8).join('\n')}</code>
                   )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'mods' && (
+        <div className="card">
+          <div className="toolbar">
+            <b>模组快照</b>
+            <span className="muted small">
+              「Mod 更新」每次替换旧 jar 前会自动存一份；手动备份会把整个 mods 目录打包（大整合包可能要等十几秒）。回滚前也会先把当前状态备份一次。
+            </span>
+            <span className="spacer" />
+            <button
+              className="btn sm ghost"
+              onClick={async () => {
+                try {
+                  toast('正在备份整个 mods 目录…', 'info')
+                  const file = await api.backupMods(activeId)
+                  if (!file) return toast('mods 目录是空的，没什么可备份', 'info')
+                  toast('已备份：' + file.split(/[\\/]/).pop(), 'success')
+                  await refreshModsBackups()
+                } catch (e) {
+                  toast('备份失败：' + friendlyError(e), 'error')
+                }
+              }}
+            >
+              备份当前 mods
+            </button>
+            <button className="btn sm ghost" onClick={() => refreshModsBackups()}>
+              刷新
+            </button>
+          </div>
+          {modsBackups.length === 0 ? (
+            <div className="muted small">还没有快照。更新模组时会自动生成，或者点「备份当前 mods」。</div>
+          ) : (
+            <div className="file-list">
+              {modsBackups.map((b) => (
+                <div className="file-row content-row" key={b.file}>
+                  <div className="content-icon dir">🧩</div>
+                  <div className="content-main">
+                    <div className="content-name">
+                      {new Date(b.time).toLocaleString('zh-CN', { hour12: false })}
+                      {b.partial && <span className="badge warn">更新前备份</span>}
+                    </div>
+                    <div className="content-desc" title={b.file}>
+                      {b.name} · {b.count} 个文件
+                    </div>
+                  </div>
+                  <span className="muted small">{formatSize(b.bytes)}</span>
+                  <span className="row">
+                    <button
+                      className="btn sm"
+                      onClick={async () => {
+                        if (
+                          !(await askConfirm({
+                            title: '回滚模组',
+                            message: '把 mods 目录回滚到这份快照？回滚前会先自动备份当前 mods，后悔了还能退回来。',
+                            okText: '回滚'
+                          }))
+                        ) {
+                          return
+                        }
+                        try {
+                          toast('正在回滚…', 'info')
+                          const r = await api.restoreModsBackup(activeId, b.file)
+                          toast(`已回滚 ${r.restored} 个文件${r.removed ? `，清掉 ${r.removed} 个新版本` : ''}`, 'success')
+                          await refresh()
+                          await refreshModsBackups()
+                        } catch (e) {
+                          toast('回滚失败：' + friendlyError(e), 'error')
+                        }
+                      }}
+                    >
+                      回滚
+                    </button>
+                  </span>
                 </div>
               ))}
             </div>
@@ -1021,14 +1202,15 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
               className="btn primary"
               onClick={async () => {
                 try {
+                  toast('正在打包日志 / 崩溃报告 / 体检结果 / 系统信息…', 'info')
                   const p = await api.exportDiagnostics(activeId)
-                  toast(`诊断包已导出：${p}`, 'success')
+                  toast(`诊断包已导出（路径和账号名已脱敏）：${p}`, 'success')
                 } catch (e) {
                   toast(`导出失败：${(e as Error).message}`, 'error')
                 }
               }}
             >
-              导出诊断包（日志+崩溃+mod 清单）
+              导出诊断包（日志+崩溃+体检+系统信息）
             </button>
             <span className="muted small">{lines.length} 行</span>
           </div>

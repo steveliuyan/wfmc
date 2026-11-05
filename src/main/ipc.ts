@@ -22,6 +22,7 @@ import { accountHealth, addOfflineAccount, completeMicrosoftLogin, refreshAccoun
 import { installResource, listResourceVersions, planInstall, searchResources, type ResourceType } from './modrinth'
 import { installCurseforgeZip, installMrpackFile, installMrpackFromUrl } from './modpack'
 import {
+  backupMods,
   backupSaves,
   contentDir,
   deleteContent,
@@ -31,9 +32,11 @@ import {
   importInstanceZip,
   listContent,
   listCrashReports,
+  listModsBackupFiles,
   listSaveBackups,
   pruneSaveBackups,
   readCrashReport,
+  restoreModsBackupSnapshot,
   restoreSaveBackup,
   toggleContent
 } from './content'
@@ -45,7 +48,7 @@ import {
   listWorlds,
   toggleDatapack
 } from './content'
-import { checkPackUpdate } from './modpack'
+import { checkPackUpdate, upgradeInstancePack } from './modpack'
 import { addServer, listServers, queryServer, removeServer, updateServer } from './servers'
 import { analyzeLatest } from './crash'
 import { applyProxy } from './proxy'
@@ -86,6 +89,7 @@ import { applyPerfPreset, deleteScreenshot, listScreenshots, PERF_PRESETS, scree
 import { cancelTask, clearFinishedTasks, listTasks, pauseTask, resumeTask, runTask, setTaskEmitter } from './tasks'
 import { applyBestUpdate, applyUpdate, checkReleases, checkUpdate, pickAsset } from './updater'
 import { diagnoseMods } from './moddoctor'
+import { setModsDiagnosisListener, startModWatch, stopModWatch } from './modwatch'
 import { fixMissingDeps } from './moddeps'
 import { installLangPacks, inspectLangPack, readPackContents, removeLangPacks, removePack } from './langpack'
 import { PACK_EXT, inspectWorldPack, packWorld, restoreWorldPack } from './worldpack'
@@ -133,6 +137,9 @@ function emit(channel: string, payload: unknown) {
 const progress = (payload: ProgressPayload) => emit('event:progress', payload)
 const log = (instanceId: string, line: string) => emit('event:launch-log', { instanceId, line })
 const state = (payload: unknown) => emit('event:launch-state', payload)
+
+// 体检常驻的结果统一从这里推给渲染层
+setModsDiagnosisListener((payload) => emit('event:mods-diagnosis', payload))
 
 /** 把 fetch 的失败原因说清楚（cause 里才有 ECONNRESET/ENOTFOUND 这些） */
 function describeNetError(e: unknown): string {
@@ -385,6 +392,12 @@ ipcMain.handle('data:size', () => store.dataSize())
   ipcMain.handle('saves:backup', (_e, instanceId: string) => backupSaves(instanceId))
   ipcMain.handle('saves:backups', (_e, instanceId: string) => listSaveBackups(instanceId))
   ipcMain.handle('saves:restore-backup', (_e, instanceId: string, file: string) => restoreSaveBackup(instanceId, file))
+  // mods 快照：折腾模组前的后悔药（更新前会自动打一份，也可以手动打）
+  ipcMain.handle('mods:backup', (_e, instanceId: string) => backupMods(instanceId))
+  ipcMain.handle('mods:backups', (_e, instanceId: string) => listModsBackupFiles(instanceId))
+  ipcMain.handle('mods:restore-backup', (_e, instanceId: string, file: string) =>
+    restoreModsBackupSnapshot(instanceId, file)
+  )
   ipcMain.handle('saves:prune-backups', (_e, instanceId: string, keep?: number) => pruneSaveBackups(instanceId, keep))
   ipcMain.handle('crash:list', (_e, instanceId: string) => listCrashReports(instanceId))
   ipcMain.handle('crash:read', (_e, instanceId: string, target: string) => readCrashReport(instanceId, target))
@@ -875,6 +888,15 @@ ipcMain.handle('data:size', () => store.dataSize())
 
   // ---------- Mod 体检 / 整合包导出 ----------
   ipcMain.handle('mods:diagnose', (_e, instanceId: string) => diagnoseMods(instanceId))
+  // 体检常驻：盯着这个实例的 mods 目录，变了就在后台重跑并推送
+  ipcMain.handle('mods:watch-start', (_e, instanceId: string) => {
+    startModWatch(instanceId)
+    return true
+  })
+  ipcMain.handle('mods:watch-stop', () => {
+    stopModWatch()
+    return true
+  })
   ipcMain.handle('modpack:export-mrpack', async (_e, instanceId: string) =>
     await runTask('modpack', '导出整合包 (.mrpack)', async (ctx) =>
       exportInstanceAsMrpack(instanceId, (p) => {
@@ -885,6 +907,15 @@ ipcMain.handle('data:size', () => store.dataSize())
   )
   ipcMain.handle('modpack:inspect', (_e, file: string) => inspectMrpack(file))
   ipcMain.handle('modpack:check-update', async (_e, instanceId: string) => await checkPackUpdate(instanceId))
+  // 就地升级整合包：新包的配置不会盖掉用户改过的文件（改过的会保留，新版留在 .packnew 旁边）
+  ipcMain.handle('modpack:upgrade', async (_e, instanceId: string) =>
+    await runTask('modpack', '升级整合包', async (ctx) =>
+      upgradeInstancePack(instanceId, (p) => {
+        progress({ ...p, taskId: ctx.id })
+        ctx.report({ phase: p.phase, current: p.current, total: p.total })
+      }, ctx.signal)
+    )
+  )
 
   // ---------- 拖拽安装 ----------
   ipcMain.handle('drop:handle', async (_e, instanceId: string | undefined, paths: string[]) => {

@@ -295,6 +295,23 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
     if (!currentId) return toast('先创建一个实例', 'error')
     setBusy(true)
     try {
+      // 启动前只拦 error 级（重复 mod / 加载器不匹配 / 前置被禁用）——warn 级不打扰
+      if (settings?.launchCheckMods !== false) {
+        const diag = await api.diagnoseMods(currentId).catch(() => undefined)
+        const bad = (diag?.issues ?? []).filter((x) => x.level === 'error')
+        if (bad.length > 0) {
+          const lines = bad.slice(0, 5).map((x, i) => `${i + 1}. ${x.title}`)
+          if (bad.length > 5) lines.push(`…另外还有 ${bad.length - 5} 条`)
+          const go = window.confirm(
+            `启动前体检发现 ${bad.length} 个严重问题，游戏很可能一启动就崩：\n\n${lines.join('\n')}\n\n仍要启动吗？\n点「取消」→ 去「内容管理 → 模组」看具体怎么修。`
+          )
+          if (!go) {
+            setBusy(false)
+            goto('manage')
+            return
+          }
+        }
+      }
       if (!current?.installed) {
         toast('首次启动，正在安装游戏文件…')
         await api.installGame(currentId)

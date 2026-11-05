@@ -6,6 +6,7 @@ import type { ProgressFn } from '../shared/types'
 import { store } from './store'
 import { downloadFile } from './net'
 import { gamePathFor, ensureGamePath } from './paths'
+import { createModsBackup, pruneModsBackups } from './modbackup'
 
 const client = new ModrinthV2Client()
 
@@ -94,7 +95,7 @@ export async function checkModUpdates(instanceId: string, onProgress?: ProgressF
   })
 }
 
-/** 下载新版本并替换旧文件（旧文件改名留底，方便回滚） */
+/** 下载新版本并替换旧文件（替换前自动把旧 jar 存一份，能一键回滚） */
 export async function applyModUpdate(
   instanceId: string,
   input: { path: string; url: string; filename: string },
@@ -104,11 +105,22 @@ export async function applyModUpdate(
   if (!instance) throw new Error('实例不存在')
   const modsDir = path.join(ensureGamePath(instance), 'mods')
   const target = path.join(modsDir, input.filename)
+
+  // 只把将被替换的这个 jar 打一份快照 —— 几百 M 的整合包也只拷一个文件
+  const oldName = path.basename(input.path)
+  createModsBackup(modsDir, store.backupsDir, instanceId, { only: [oldName], note: `更新前：${oldName}` })
+  pruneModsBackups(store.backupsDir, instanceId)
+
   onProgress?.({ key: 'mod-updates', phase: `下载 ${input.filename}`, current: 0, total: 1 })
   await downloadFile(input.url, target, undefined, { skipIfExists: false })
   onProgress?.({ key: 'mod-updates', phase: `${input.filename} 已更新`, current: 1, total: 1 })
   if (fs.existsSync(input.path) && path.resolve(input.path) !== path.resolve(target)) {
-    fs.renameSync(input.path, `${input.path}.old`)
+    // 旧文件已经进快照了，这里直接删掉，免得 mods 里留一堆 .old
+    try {
+      fs.rmSync(input.path, { force: true })
+    } catch {
+      fs.renameSync(input.path, `${input.path}.old`)
+    }
   }
   return target
 }

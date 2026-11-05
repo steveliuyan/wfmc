@@ -372,6 +372,25 @@ export default function SettingsView() {
                 </div>
                 <div>
                   <div className="set-block-title" style={{ fontWeight: 400, marginBottom: 6, fontSize: 12 }}>
+                    启动前跑一遍模组体检
+                  </div>
+                  <div className="chips">
+                    <button
+                      className={`chip ${settings.launchCheckMods !== false ? 'on' : ''}`}
+                      onClick={() => saveSettings({ launchCheckMods: true })}
+                    >
+                      开着（重复 mod / 加载器不对先拦一下）
+                    </button>
+                    <button
+                      className={`chip ${settings.launchCheckMods === false ? 'on' : ''}`}
+                      onClick={() => saveSettings({ launchCheckMods: false })}
+                    >
+                      关掉（直接启动）
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <div className="set-block-title" style={{ fontWeight: 400, marginBottom: 6, fontSize: 12 }}>
                     语言
                   </div>
                   <div className="chips">
