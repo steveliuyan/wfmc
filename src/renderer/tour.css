@@ -11,7 +11,7 @@
   position: fixed;
   inset: 0;
   background: rgba(9, 10, 18, 0.62);
-  animation: tourFade 0.2s ease;
+  animation: tourFade 0.28s ease both;
 }
 
 /* 挖洞：本体透明，靠超大 box-shadow 把四周压暗 */
@@ -21,10 +21,14 @@
   box-shadow: 0 0 0 9999px rgba(9, 10, 18, 0.62);
   pointer-events: none;
   will-change: left, top, width, height;
-  animation: tourFade 0.24s ease;
   /* 换一步时洞要「滑」过去，别瞬移 */
   transition: left 0.3s cubic-bezier(0.22, 0.61, 0.36, 1), top 0.3s cubic-bezier(0.22, 0.61, 0.36, 1),
     width 0.3s cubic-bezier(0.22, 0.61, 0.36, 1), height 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* 光圈第一次出现时「从里往外」张开一下，别硬切（换步骤时靠 transition 滑过去） */
+.tour-hole {
+  animation: tourHoleIn 0.34s cubic-bezier(0.22, 1.08, 0.36, 1) both;
 }
 
 .tour-hole::after {
@@ -49,6 +53,17 @@
   }
 }
 
+@keyframes tourHoleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @keyframes tourFade {
   from {
     opacity: 0;
@@ -58,10 +73,23 @@
   }
 }
 
-@keyframes tourIn {
+/* 说明卡文案：淡入 + 轻微上浮 */
+@keyframes tourRise {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 整卡登场：从略小、略偏下「长」出来，带一点点回弹 */
+@keyframes tourPop {
+  from {
+    opacity: 0;
+    transform: scale(0.955) translateY(10px);
   }
   to {
     opacity: 1;
@@ -71,22 +99,52 @@
 
 .tour-tip {
   position: fixed;
-  width: 342px;
+  width: 366px;
   max-width: calc(100vw - 28px);
-  padding: 16px 16px 14px;
+  padding: 16px 18px 14px;
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: 14px;
   box-shadow: 0 26px 70px rgba(0, 0, 0, 0.42);
   z-index: 9600;
-  animation: tourIn 0.22s ease;
-  transition: left 0.3s cubic-bezier(0.22, 0.61, 0.36, 1), top 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* 位置没量好之前先别出来，免得从屏幕外「蹦」进来 */
+  opacity: 0;
+  transform-origin: 50% 50%;
+}
+
+/* 量好位置之后：登场动画 + 之后换步骤时左/上平滑滑动 */
+.tour-tip.ready {
+  animation: tourPop 0.34s cubic-bezier(0.22, 1.06, 0.36, 1) both;
+  transition: left 0.32s cubic-bezier(0.22, 0.61, 0.36, 1), top 0.32s cubic-bezier(0.22, 0.61, 0.36, 1);
   will-change: left, top;
 }
 
-/* 每换一步文案淡入 + 轻微上浮（外框位置在动，所以只动里面的内容，别整块重建） */
-.tour-step {
-  animation: tourIn 0.24s ease both;
+/* 登场方向：向高亮块那一侧张开，看着更「连」得上 */
+.tour-tip.side-right {
+  transform-origin: 6% 50%;
+}
+.tour-tip.side-left {
+  transform-origin: 94% 50%;
+}
+.tour-tip.side-top {
+  transform-origin: 50% 94%;
+}
+.tour-tip.side-bottom {
+  transform-origin: 50% 6%;
+}
+
+/* 每换一步文案分两拍进来（标题先、正文后），比整块闪一下自然 */
+.tour-step > * {
+  animation: tourRise 0.32s cubic-bezier(0.22, 1.06, 0.36, 1) both;
+}
+.tour-step > *:nth-child(2) {
+  animation-delay: 0.045s;
+}
+.tour-step > *:nth-child(3) {
+  animation-delay: 0.08s;
+}
+.tour-step > *:nth-child(4) {
+  animation-delay: 0.115s;
 }
 
 .tour-kicker {
@@ -99,22 +157,29 @@
 .tour-tip h3 {
   margin: 6px 0 8px;
   font-size: 16px;
-  line-height: 1.35;
+  line-height: 1.4;
+  text-wrap: pretty;
 }
 
 .tour-body {
   margin: 0;
   font-size: 13px;
-  line-height: 1.7;
+  line-height: 1.72;
   color: var(--muted);
+  text-wrap: pretty;
 }
 
 .tour-points {
-  margin: 8px 0 0;
-  padding-left: 18px;
+  margin: 9px 0 0;
+  padding-left: 17px;
   font-size: 13px;
   line-height: 1.75;
   color: var(--muted);
+  text-wrap: pretty;
+}
+
+.tour-points li + li {
+  margin-top: 3px;
 }
 
 .tour-points li::marker {
@@ -126,25 +191,27 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 14px;
+  margin-top: 16px;
 }
 
+/* 进度条：卡片内的一条细轨，别再贴着卡片圆角边描边（会像掉出来一截） */
 .tour-bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 3px;
-  border-radius: 0 0 14px 14px;
+  height: 4px;
+  margin-top: 12px;
+  border-radius: 999px;
   overflow: hidden;
   background: var(--bg-3);
+  /* 轨道比卡片底色再深一点点，浅色主题下才看得出来 */
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-2));
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
 }
 
 .tour-bar i {
   display: block;
   height: 100%;
+  border-radius: 999px;
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
-  transition: width 0.28s ease;
+  transition: width 0.32s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 /* 侧边栏里的入口：随时再放一遍 */

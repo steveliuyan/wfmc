@@ -42,6 +42,8 @@ export default function Tour({
   const [idx, setIdx] = useState(0)
   const [rect, setRect] = useState<Rect | null>(null)
   const [pos, setPos] = useState<{ left: number; top: number; side: string }>({ left: -9999, top: -9999, side: 'right' })
+  // 位置量好之后才让卡片登场，否则会先在屏幕外画出来再「蹦」到位置上
+  const [ready, setReady] = useState(false)
   const tipRef = useRef<HTMLDivElement>(null)
   const step = steps[idx]
 
@@ -176,6 +178,13 @@ export default function Tour({
     setPos({ left: Math.round(left), top: Math.round(top), side })
   }, [rect, idx, step])
 
+  // 位置一量好就放它登场（只放一次，换步骤时不再重播登场动画）
+  useEffect(() => {
+    if (ready || pos.left < 0) return
+    const id = requestAnimationFrame(() => setReady(true))
+    return () => cancelAnimationFrame(id)
+  }, [pos.left, ready])
+
   const last = idx === steps.length - 1
   const next = useCallback(() => {
     if (last) onClose()
@@ -212,7 +221,7 @@ export default function Tour({
 
       <div
         ref={tipRef}
-        className={`tour-tip side-${pos.side}`}
+        className={`tour-tip side-${pos.side}${ready ? ' ready' : ''}`}
         style={{ left: pos.left, top: pos.top, visibility: pos.left < 0 ? 'hidden' : 'visible' }}
       >
         <div className="tour-step" key={idx}>
