@@ -88,7 +88,11 @@ export async function installMrpackFile(
     loaderVersion
   })
 
-  await installInstanceGame(instance, onProgress, { signal, spawn })
+  // installInstanceGame 返回的是「装完加载器之后」的实例：versionId 已经改成
+  // fabric-loader-x-y 这类。下面写 packSource 必须用它的返回值 ——
+  // 拿 createInstance 那个旧对象去 save，会把 versionId 又写回原版，
+  // 结果整合包装好了却按原版启动，模组一个都不加载。
+  const installed = await installInstanceGame(instance, onProgress, { signal, spawn })
 
   const gameDir = store.instanceGameDir(instance.id)
   const key = `modpack-${instance.id}`
@@ -115,7 +119,7 @@ export async function installMrpackFile(
     fs.writeFileSync(path.join(store.instanceDir(instance.id), 'download-errors.log'), errors.join('\n'), 'utf-8')
   }
   store.saveInstance({
-    ...instance,
+    ...installed,
     packSource: {
       kind: meta?.projectId ? 'modrinth' : 'local',
       projectId: meta?.projectId,

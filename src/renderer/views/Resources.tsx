@@ -52,6 +52,9 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
   const [mcVersion, setMcVersion] = useState('')
   const [loaderFilter, setLoaderFilter] = useState('')
   const [versions, setVersions] = useState<Record<string, ResourceVersion[]>>({})
+  // 这个项目的版本列表是不是「显示全部」（不按 MC 版本 / 加载器过滤）
+  const [versionAll, setVersionAll] = useState<Record<string, boolean>>({})
+  const [versionBusy, setVersionBusy] = useState('')
   const [busy, setBusy] = useState('')
   const [sort, setSort] = useState<'downloads' | 'follows' | 'newest' | 'relevance'>('downloads')
   const [netError, setNetError] = useState(false)
@@ -192,6 +195,27 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind])
 
+  const loadVersions = async (hit: ResourceHit, all: boolean) => {
+    setVersionBusy(hit.projectId)
+    try {
+      const list = await api.resourceVersions(
+        hit.projectId,
+        all
+          ? {}
+          : {
+              mcVersion: mcVersion || undefined,
+              loader: kind === 'mod' ? loaderFilter || undefined : undefined
+            }
+      )
+      setVersions((prev) => ({ ...prev, [hit.projectId]: list }))
+      setVersionAll((prev) => ({ ...prev, [hit.projectId]: all }))
+    } catch (e) {
+      toast(`读取版本列表失败：${(e as Error).message}`, 'error')
+    } finally {
+      setVersionBusy('')
+    }
+  }
+
   const openVersions = async (hit: ResourceHit) => {
     if (versions[hit.projectId]) {
       setVersions((prev) => {
@@ -199,13 +223,14 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
         delete next[hit.projectId]
         return next
       })
+      setVersionAll((prev) => {
+        const next = { ...prev }
+        delete next[hit.projectId]
+        return next
+      })
       return
     }
-    const list = await api.resourceVersions(hit.projectId, {
-      mcVersion: mcVersion || undefined,
-      loader: kind === 'mod' ? loaderFilter || undefined : undefined
-    })
-    setVersions((prev) => ({ ...prev, [hit.projectId]: list }))
+    await loadVersions(hit, false)
   }
 
   /** 点「安装」不直接下，先算清单：主文件 + 必需前置 + 可选 + 冲突，让用户看清再决定 */
@@ -310,7 +335,7 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
         </div>
         <div className="tabs">
           {(Object.keys(tabLabel) as Tab[]).map((k) => (
-            <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>
+            <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)} data-tour={`res-tab-${k}`}>
               {tabLabel[k]}
             </button>
           ))}
@@ -319,7 +344,7 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
 
       <div className="card">
         <div className="row wrap" style={{ alignItems: 'flex-end', gap: 12 }}>
-          <div>
+          <div data-tour="res-target">
             <div className="mini-label">安装到哪个实例</div>
             <Select
               className="w260"
@@ -507,17 +532,51 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
             </div>
             {versions[h.projectId] && (
               <div className="version-list">
-                {versions[h.projectId].length === 0 && <div className="muted small">没有匹配当前实例的版本</div>}
-                {versions[h.projectId].slice(0, 12).map((v) => (
-                  <div className="version-row" key={v.id}>
-                    <span>
-                      {v.name} <span className="muted small">({v.versionNumber} · {v.loaders.join('/')})</span>
-                    </span>
-                    <button className="btn sm" onClick={() => openPlan(h, v.id)}>
-                      装这个
-                    </button>
+                <div className="version-head">
+                  <span className="muted small">
+                    {versionAll[h.projectId]
+                      ? '全部版本（不限 MC 版本和加载器）'
+                      : mcVersion || (kind === 'mod' && loaderFilter)
+                        ? `只列 ${[mcVersion || '不限 MC 版本', kind === 'mod' ? loaderFilter || '不限加载器' : '']
+                            .filter(Boolean)
+                            .join(' / ')} 的版本`
+                        : '版本列表（没设 MC 版本 / 加载器筛选）'}
+                  </span>
+                  <button
+                    className="btn ghost sm"
+                    disabled={versionBusy === h.projectId}
+                    onClick={() => loadVersions(h, !versionAll[h.projectId])}
+                  >
+                    {versionBusy === h.projectId ? '读取中…' : versionAll[h.projectId] ? '只看兼容的' : '显示全部版本'}
+                  </button>
+                </div>
+                {versions[h.projectId].length === 0 && (
+                  <div className="muted small">
+                    没有匹配当前实例的版本，点右上「显示全部版本」自己挑一个。
                   </div>
-                ))}
+                )}
+                {versions[h.projectId].slice(0, 30).map((v) => {
+                  const mcOk = !mcVersion || v.gameVersions.length === 0 || v.gameVersions.includes(mcVersion)
+                  const ldOk =
+                    kind !== 'mod' || !loaderFilter || v.loaders.length === 0 || v.loaders.includes(loaderFilter)
+                  // 名字里通常已经带版本号，重复写一遍只占地方
+                  const vn = v.versionNumber && !v.name.includes(v.versionNumber) ? ` · ${v.versionNumber}` : ''
+                  return (
+                    <div className={`version-row${mcOk && ldOk ? '' : ' mismatch'}`} key={v.id}>
+                      <span>
+                        {v.name}{' '}
+                        <span className="muted small">
+                          ({v.gameVersions.slice(0, 3).join('/') || '版本未标'} · {v.loaders.join('/') || '通用'}
+                          {vn})
+                        </span>
+                        {!(mcOk && ldOk) && <span className="warn-tag">跟当前实例不匹配</span>}
+                      </span>
+                      <button className="btn sm" onClick={() => openPlan(h, v.id)}>
+                        装这个
+                      </button>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>

@@ -7,6 +7,7 @@ import { store } from './store'
 import { ensureJava, requiredJavaMajor } from './java'
 import { ensureGameLanguage } from './options'
 import { ensureNatives } from './natives'
+import { loaderTargetVersionId } from './minecraft'
 import { backupSaves, listContent, pruneSaveBackups } from './content'
 import { ensureGamePath, resourcePathFor } from './paths'
 import { ensureInjector } from './authlib'
@@ -29,6 +30,31 @@ const running = new Map<string, Running>()
 
 export function isRunning(instanceId: string) {
   return running.has(instanceId)
+}
+
+/**
+ * 启动用哪个版本 id。
+ *
+ * instance.versionId 正常应该已经指向带加载器的那份（fabric-loader-0.18.2-1.20.1）。
+ * 但早期版本导入整合包时会把 versionId 写回原版，于是「模组装了满屏，进去只有原版物品」。
+ * 这里不信任存的值，按磁盘实际存在的版本重新认一遍：
+ *   1. 存的版本 json 在、而且不是原版名 → 就用它（用户手动切过加载器/版本也照办）
+ *   2. 加载器版本按 loader + loaderVersion 算得出来、且装好了 → 用它
+ *   3. 退回原版
+ */
+export function resolveLaunchVersionId(instance: Instance, resourceDir: string): string {
+  const installed = (id?: string) =>
+    !!id && fs.existsSync(path.join(resourceDir, 'versions', id, `${id}.json`))
+  const saved = instance.versionId || instance.mcVersion
+  const want =
+    instance.loader !== 'vanilla' && instance.loaderVersion
+      ? loaderTargetVersionId(instance.loader, instance.mcVersion, instance.loaderVersion)
+      : ''
+
+  if (saved !== instance.mcVersion && installed(saved)) return saved
+  if (want && installed(want)) return want
+  if (installed(instance.mcVersion)) return instance.mcVersion
+  return saved
 }
 
 export function killGame(instanceId: string) {
@@ -65,7 +91,20 @@ export async function launchInstance(
   // 版本隔离：游戏数据目录（存档 / mods / 配置）可以按版本分开
   const gameDir = ensureGamePath(instance)
   const resourceDir = resourcePathFor(instance)
-  const versionId = instance.versionId || instance.mcVersion
+  const wanted = instance.versionId || instance.mcVersion
+  const versionId = resolveLaunchVersionId(instance, resourceDir)
+  if (versionId !== wanted) {
+    // 顺手把实例里存错的版本改回来，免得「内容管理」里显示的版本和实际启动的对不上
+    try {
+      store.saveInstance({ ...instance, versionId })
+    } catch {
+      /* 写不进去也照样启动 */
+    }
+    onLog(
+      instance.id,
+      `[WFMC] 实例里存的版本是 ${wanted}，但${instance.loader !== 'vanilla' ? ` ${instance.loader} ${instance.loaderVersion ?? ''}` : ''} 装的是 ${versionId}，已按后者启动（模组才会加载）`
+    )
+  }
   const settings = store.settings
 
   onState({ instanceId: instance.id, state: 'preparing', message: '解析版本信息…' })

@@ -59,6 +59,8 @@ export interface Settings {
   yggdrasilApi?: string
   /** 是否已确认免责声明 */
   disclaimerAccepted?: boolean
+  /** 新手引导（高亮讲解）看完了没——看过的就不自动弹了，左侧「新手引导」还能再放一遍 */
+  tourDone?: boolean
   /** 点窗口 ✕ 时最小化到托盘（服务端还在跑时不退出） */
   closeToTray?: boolean
   /** 开机自动检查更新 */

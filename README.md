@@ -6,6 +6,8 @@
 > **开源仓库**：https://github.com/steveliuyan/wfmc · **下载**：https://github.com/steveliuyan/wfmc/releases
 > 许可证 MIT（见 `LICENSE`），分发须知见 `NOTICE.md`，免责声明见 `DISCLAIMER.md`。
 
+> **第一次用？先看 [`USAGE.md`](USAGE.md)** —— 面向零基础玩家的图文指引：怎么下游戏、怎么装整合包、为什么装了模组进游戏还是原版、装不上怎么办。带截图和按钮对照。
+
 ## 快速开始（从源码）
 
 ```powershell

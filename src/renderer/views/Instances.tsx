@@ -97,7 +97,7 @@ function LoaderPanel({ instance, onDone }: { instance: Instance; onDone: () => P
   const alreadyHave = !!targetId && installed.includes(targetId)
 
   return (
-    <div className="detail loader-panel">
+    <div className="detail loader-panel" data-tour="inst-loader-panel">
       <div className="row wrap loader-now">
         <span className={`badge ${instance.loader}`}>{LOADER_LABEL[instance.loader] ?? instance.loader}</span>
         <span className="muted small">当前：{current}</span>
@@ -427,7 +427,11 @@ export default function Instances() {
           const openKey = openPanel?.id === i.id ? openPanel.key : undefined
           const mountedKey = visiblePanel?.id === i.id ? visiblePanel.key : undefined
           return (
-            <div className={`card instance ${i.id === currentId ? 'current' : ''}`} key={i.id}>
+            <div
+              className={`card instance ${i.id === currentId ? 'current' : ''}`}
+              key={i.id}
+              data-tour={i === instances[0] ? 'inst-card' : undefined}
+            >
               <div className="instance-head">
                 <h3>{i.name}</h3>
                 <span className={`badge ${i.loader}`}>{i.loader}</span>
@@ -454,6 +458,7 @@ export default function Instances() {
                     className={`btn sm seg ${openKey === key ? 'on' : ''}`}
                     onClick={() => togglePanel(i.id, key)}
                     aria-expanded={openKey === key}
+                    data-tour={i === instances[0] ? `inst-seg-${key}` : undefined}
                   >
                     {label}
                     <i className={`chev ${openKey === key ? 'up' : ''}`}>▾</i>
@@ -637,7 +642,7 @@ export default function Instances() {
                     体积 {formatSize(d.diskUsage)} · 模组 {d.counts.mods} · 资源包 {d.counts.resourcepacks} · 光影{' '}
                     {d.counts.shaderpacks} · 存档 {d.counts.saves}
                   </div>
-                  <div className="version-list">
+                  <div className="version-list" data-tour="inst-versions">
                     <div className="mini-label">已装版本</div>
                     {d.versions.length === 0 && <div className="muted small">还没装</div>}
                     {d.versions.map((v) => (

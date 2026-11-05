@@ -1349,6 +1349,10 @@ export default function SettingsView() {
               第三方启动器，与 Mojang / Microsoft 无关；使用风险自担（详见弹窗与 DISCLAIMER.md）。
               <br />
               图标与动画来自万凡科技品牌包（靛紫电光）；感谢上面名单里的每一位作者。
+              <br />
+              内置的 4 首背景音乐是程序合成的原创曲（生成脚本 scripts/gen-music.py 随源码公开），
+              <b>不含 Minecraft 原版配乐</b> —— 原版音乐版权归 C418 / Mojang，不能随安装包分发；
+              想听原版请把音频文件放进 data/music，或用播放器里的「导入音乐」。
             </p>
           </section>
         </div>

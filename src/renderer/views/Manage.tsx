@@ -168,7 +168,7 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
         </div>
         <div className="tabs">
           {tabs.map((t) => (
-            <button key={t.id} className={tab === t.id ? 'on' : ''} onClick={() => setTab(t.id)}>
+            <button key={t.id} className={tab === t.id ? 'on' : ''} onClick={() => setTab(t.id)} data-tour={`mg-tab-${t.id}`}>
               {t.label}
             </button>
           ))}
@@ -926,6 +926,7 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
             </button>
             <button
               className="btn primary"
+              data-tour="mg-diagnose"
               onClick={async () => {
                 const d = await api.diagnose(activeId)
                 setDiagnosis(d)

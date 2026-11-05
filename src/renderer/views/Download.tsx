@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { api, friendlyError, progressPercent, progressText, versionTypeLabel } from '../api'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { api, formatSize, friendlyError, progressPercent, progressText, versionTypeLabel } from '../api'
 import type { RemoteVersion } from '../../shared/types'
 import { useLauncher, useT } from '../store'
 import SourcePicker from '../components/SourcePicker'
@@ -141,6 +141,45 @@ export default function Download({ goto }: { goto: (p: 'instances') => void }) {
   // 结束/取消的进度（done）不再显示，否则卡片会一直挂在页面上
   const currentProgress = Object.values(progress).filter((p) => p.total && !p.done)
 
+  // 下载速度：进度事件只给累计字节，速度得自己按时间差算；用 EMA 平滑，暂停/卡住会自然掉回 0
+  const speedRef = useRef<Record<string, { bytes: number; t: number; speed: number }>>({})
+  const [speeds, setSpeeds] = useState<Record<string, number>>({})
+  const progressRef = useRef(progress)
+  progressRef.current = progress
+  useEffect(() => {
+    const tick = () => {
+      const now = performance.now()
+      const alive = progressRef.current
+      const next: Record<string, number> = {}
+      for (const [k, p] of Object.entries(alive)) {
+        if (p.done || !p.totalBytes) continue
+        const bytes = p.bytes ?? 0
+        const prev = speedRef.current[k]
+        if (!prev) {
+          speedRef.current[k] = { bytes, t: now, speed: 0 }
+          next[k] = 0
+          continue
+        }
+        const dt = (now - prev.t) / 1000
+        if (dt < 0.35) {
+          next[k] = prev.speed
+          continue
+        }
+        const inst = Math.max(0, bytes - prev.bytes) / dt
+        const smooth = prev.speed > 0 ? prev.speed * 0.55 + inst * 0.45 : inst
+        speedRef.current[k] = { bytes, t: now, speed: smooth }
+        next[k] = smooth
+      }
+      for (const k of Object.keys(speedRef.current)) {
+        const p = alive[k]
+        if (!p || p.done) delete speedRef.current[k]
+      }
+      setSpeeds(next)
+    }
+    const id = window.setInterval(tick, 800)
+    return () => window.clearInterval(id)
+  }, [])
+
   const startUrlDownload = async () => {
     const url = urlInput.trim()
     if (!url) return
@@ -164,7 +203,7 @@ export default function Download({ goto }: { goto: (p: 'instances') => void }) {
         </div>
       </header>
 
-      <div className="card">
+      <div className="card" data-tour="dl-card">
         <div className="row-between" style={{ border: 'none' }}>
           <h3 style={{ margin: 0 }}>安装原版或加载器版本</h3>
           <SourcePicker />
@@ -276,6 +315,11 @@ export default function Download({ goto }: { goto: (p: 'instances') => void }) {
                 <div className="progress-label">
                   <span>{p.phase}</span>
                   <span className="progress-nums muted">
+                    {live && (speeds[p.key] ?? 0) > 0 && (
+                      <i className="speed" title="当前下载速度">
+                        ↓ {formatSize(speeds[p.key])}/s
+                      </i>
+                    )}
                     {progressText(p)}
                     <b>{pct}%</b>
                   </span>

@@ -963,6 +963,14 @@ label.full {
   text-align: right;
 }
 
+/* 下载速度：贴在「已下载/总量」左边，等宽数字 + 强调色，别抢百分比的视觉重量 */
+.progress-nums i.speed {
+  font-style: normal;
+  color: var(--accent);
+  font-weight: 600;
+  opacity: 0.9;
+}
+
 .bar {
   height: 8px;
   background: var(--bg-4);
@@ -1101,6 +1109,35 @@ label.full {
   align-items: center;
   gap: 10px;
   font-size: 12.5px;
+}
+
+/* 版本列表顶部：说明当前是按什么筛的 + 切换「显示全部版本」 */
+.version-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  position: sticky;
+  top: -10px;
+  background: var(--bg-2, transparent);
+  padding: 2px 0;
+  z-index: 1;
+}
+
+/* 跟当前实例/筛选对不上的版本：还能装，但先提醒一句 */
+.version-row.mismatch {
+  opacity: 0.72;
+}
+
+.warn-tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: #a8620a;
+  background: rgba(214, 132, 20, 0.14);
+  border: 1px solid rgba(214, 132, 20, 0.3);
+  white-space: nowrap;
 }
 
 .file-list {
@@ -2000,6 +2037,60 @@ label.full {
   font-size: 12.5px;
   font-weight: 600;
   margin-bottom: 8px;
+}
+
+/* 播放进度条：轨道和滑块自己画。默认外观在 252px 的窄面板里两头会被切断，
+   拖到最左/最右像「卡住」，所以这里显式给满宽 + 自定义 thumb。 */
+.music-seek {
+  margin-top: 8px;
+}
+
+.music-seek input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.music-seek input[type='range']:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.music-seek input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-4);
+}
+
+.music-seek input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  transition: transform 0.12s;
+}
+
+.music-seek input[type='range']:active::-webkit-slider-thumb {
+  transform: scale(1.18);
+}
+
+.music-time {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 1px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .music-list {

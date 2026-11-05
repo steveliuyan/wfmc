@@ -19,6 +19,8 @@ import { setAutoI18n } from './autoI18n'
 import { setDeepLink } from './deeplink'
 import Manage from './views/Manage'
 import SettingsView from './views/Settings'
+import Tour from './components/Tour'
+import { tourSteps } from './tour-steps'
 import logoHorizontal from './assets/lottie-horizontal.json'
 import logoBadge from './assets/logo-badge.png'
 
@@ -298,6 +300,20 @@ function Shell() {
   // 左下角账号：点一下就地展开列表切换，不用每次都跑设置页
   const [acctOpen, setAcctOpen] = useState(false)
   const [newName, setNewName] = useState('')
+  // 新手引导（高亮讲解）：首次自动放一遍，之后靠侧边栏入口手动重放
+  const [tourOpen, setTourOpen] = useState(false)
+  const closeTour = useCallback(() => {
+    setTourOpen(false)
+    void saveSettings({ tourDone: true })
+  }, [saveSettings])
+
+  // 第一次进主界面（免责声明和基础引导都过了）自动放一遍新手引导
+  useEffect(() => {
+    if (!ready || !settings) return
+    if (!settings.disclaimerAccepted || !settings.onboarded || settings.tourDone) return
+    const timer = setTimeout(() => setTourOpen(true), 900)
+    return () => clearTimeout(timer)
+  }, [ready, settings])
   const activeAccount = accounts.find((x) => x.id === settings?.activeAccountId) ?? accounts[0]
   const acctType = (t?: string) => (t === 'microsoft' ? '正版' : t === 'yggdrasil' ? '外置' : '离线')
 
@@ -633,6 +649,11 @@ function Shell() {
           </div>
         </div>
 
+        <button className="tour-launch" onClick={() => setTourOpen(true)} title="重看一遍高亮新手引导">
+          <span className="tour-launch-dot">?</span>
+          新手引导
+        </button>
+
         <nav>
           {nav.map((item) => (
             <button
@@ -811,6 +832,8 @@ function Shell() {
       {settings && settings.disclaimerAccepted && !settings.onboarded && <Onboarding />}
 
       <TaskPanel />
+
+      {tourOpen && <Tour steps={tourSteps} goto={(p) => setPage(p as PageId)} onClose={closeTour} />}
 
       {dropHint && (
         <div className="drop-overlay">

@@ -696,6 +696,7 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
             ) : (
               <div
                 className={`card ${editing ? 'movable' : ''}`}
+                data-tour={id === 'log' ? 'home-log' : undefined}
                 onPointerDown={(e) => beginPress(e, id)}
                 onPointerUp={endPress}
                 onPointerCancel={endPress}

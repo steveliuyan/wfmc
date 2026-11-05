@@ -1,0 +1,184 @@
+/* 新手引导：遮罩挖洞 + 光圈 + 说明卡（不引第三方库） */
+.tour-root {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  pointer-events: auto;
+}
+
+/* 没有目标元素时的整屏压暗 */
+.tour-shade {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 10, 18, 0.62);
+  animation: tourFade 0.2s ease;
+}
+
+/* 挖洞：本体透明，靠超大 box-shadow 把四周压暗 */
+.tour-hole {
+  position: fixed;
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(9, 10, 18, 0.62);
+  pointer-events: none;
+  will-change: left, top, width, height;
+  animation: tourFade 0.24s ease;
+  /* 换一步时洞要「滑」过去，别瞬移 */
+  transition: left 0.3s cubic-bezier(0.22, 0.61, 0.36, 1), top 0.3s cubic-bezier(0.22, 0.61, 0.36, 1),
+    width 0.3s cubic-bezier(0.22, 0.61, 0.36, 1), height 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.tour-hole::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 16px;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 0 6px var(--accent-soft), 0 0 22px var(--accent-glow);
+  animation: tourPulse 1.9s ease-in-out infinite;
+}
+
+@keyframes tourPulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.035);
+  }
+}
+
+@keyframes tourFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes tourIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.tour-tip {
+  position: fixed;
+  width: 342px;
+  max-width: calc(100vw - 28px);
+  padding: 16px 16px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.42);
+  z-index: 9600;
+  animation: tourIn 0.22s ease;
+  transition: left 0.3s cubic-bezier(0.22, 0.61, 0.36, 1), top 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: left, top;
+}
+
+/* 每换一步文案淡入 + 轻微上浮（外框位置在动，所以只动里面的内容，别整块重建） */
+.tour-step {
+  animation: tourIn 0.24s ease both;
+}
+
+.tour-kicker {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.tour-tip h3 {
+  margin: 6px 0 8px;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.tour-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.tour-points {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--muted);
+}
+
+.tour-points li::marker {
+  color: var(--accent);
+}
+
+.tour-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.tour-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  border-radius: 0 0 14px 14px;
+  overflow: hidden;
+  background: var(--bg-3);
+}
+
+.tour-bar i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.28s ease;
+}
+
+/* 侧边栏里的入口：随时再放一遍 */
+.tour-launch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 2px 0 10px;
+  padding: 7px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tour-launch:hover {
+  color: var(--accent);
+  border-color: var(--accent-ring);
+  background: var(--accent-soft);
+}
+
+.tour-launch-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
