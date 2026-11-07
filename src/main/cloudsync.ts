@@ -494,6 +494,8 @@ export async function cloudStatus(): Promise<CloudStatus> {
   try {
     const local = await listLocalBackups()
     status.localBackups = local
+    // 本地保留份数是客户端自己定的（LOCAL_KEEP），跟服务端的云端保留份数无关
+    status.localKeep = LOCAL_KEEP
     status.online = true
   } catch (e) {
     status.error = (e as Error).message

@@ -32,7 +32,6 @@ const RAIL: { id: string; label: string; icon: string }[] = [
   { id: 'accounts', label: '账号', icon: '👤' },
   { id: 'curseforge', label: 'CurseForge', icon: '🔑' },
   { id: 'cloud', label: '云同步', icon: '☁' },
-  { id: 'wfmc', label: '云账号', icon: '👥' },
   { id: 'update', label: '更新', icon: '🔄' },
   { id: 'credits', label: '致谢', icon: '💖' },
   { id: 'about', label: '关于', icon: 'ℹ' }
@@ -1311,14 +1310,12 @@ export default function SettingsView() {
             </p>
           </section>
 
-          {/* ── 云同步（自建服务端） ─────────────────── */}
+          {/* ── 云同步（自建服务端）：账号 + 备份在同一个分区里 ── */}
           <section id="set-cloud" className="card set-card">
+            <div id="set-wfmc">
+              <WfmcAccountPanel />
+            </div>
             <CloudPanel />
-          </section>
-
-          {/* ── WFMC 云账号（跟微软账号无关） ─────────── */}
-          <section id="set-wfmc" className="card set-card">
-            <WfmcAccountPanel />
           </section>
 
           {/* ── 更新 ────────────────────────────────── */}

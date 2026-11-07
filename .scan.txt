@@ -1,0 +1,366 @@
+﻿渲染层中文字面量 1189 条：精确命中 817，靠长词部分命中 43，完全没翻 329
+覆盖率 72%（阈值 0%）
+
+按「完全没翻」排序：
+    65   50%  src/renderer/views/Manage.tsx
+    30   81%  src/renderer/views/Settings.tsx
+    29   12%  src/renderer/views/UpdateCenter.tsx
+    27   68%  src/renderer/views/Resources.tsx
+    26   63%  src/renderer/views/Instances.tsx
+    25   68%  src/renderer/views/Online.tsx
+    20   62%  src/renderer/components/HostedBoard.tsx
+    12   76%  src/renderer/components/CloudPanel.tsx
+    10   90%  src/renderer/App.tsx
+    10   78%  src/renderer/views/Home.tsx
+    10   87%  src/renderer/views/Hosting.tsx
+    10   76%  src/renderer/views/Skin.tsx
+     9   53%  src/renderer/components/ShareCard.tsx
+     8   79%  src/renderer/components/ModpackSearch.tsx
+     8   65%  src/renderer/components/SaveWorkshop.tsx
+     7   70%  src/renderer/components/RoomManifestCard.tsx
+     7   46%  src/renderer/joinWithSync.ts
+     4   73%  src/renderer/views/Servers.tsx
+     3   40%  src/renderer/components/ModGraph.tsx
+     3   67%  src/renderer/views/TaskPanel.tsx
+     2   85%  src/renderer/api.ts
+     2   93%  src/renderer/views/Download.tsx
+     2   67%  src/renderer/views/Notify.tsx
+     0  100%  src/renderer/components/Select.tsx
+     0  100%  src/renderer/components/SourcePicker.tsx
+     0  100%  src/renderer/components/Tour.tsx
+     0  100%  src/renderer/components/WfmcAccountPanel.tsx
+     0  100%  src/renderer/store.tsx
+     0  100%  src/renderer/tour-steps.ts
+     0  100%  src/renderer/views/MusicPlayer.tsx
+     0  100%  src/renderer/views/NoticePopup.tsx
+
+完全没翻的文案（往 src/renderer/i18n-zh.ts 的 PAIRS 里加）：
+  src/renderer/api.ts:872  ${minutes} 分钟
+  src/renderer/api.ts:873  ${hours} 小时 ${minutes} 分
+  src/renderer/App.tsx:341  已切到 ${a.name}
+  src/renderer/App.tsx:343  切换失败：${(e as Error).message}
+  src/renderer/App.tsx:355  添加失败：${(e as Error).message}
+  src/renderer/App.tsx:392  ，可在「设置 → 检查更新」查看
+  src/renderer/App.tsx:498  （还有 ${fresh.length - 1} 条）
+  src/renderer/App.tsx:604  拖拽安装失败：${(err as Error).message}
+  src/renderer/App.tsx:627  已识别验证服务器：${apiRoot}
+  src/renderer/App.tsx:709  ${i.mcVersion} · 切到它
+  src/renderer/App.tsx:793  新版本 ${newRelease.version}
+  src/renderer/App.tsx:1046  ${paletteItems.length} 项
+  src/renderer/components/CloudPanel.tsx:228  备份将存到 ${localDir}
+  src/renderer/components/CloudPanel.tsx:240  备份将存到 ${dir}
+  src/renderer/components/CloudPanel.tsx:265  上次出错：${status.error}
+  src/renderer/components/CloudPanel.tsx:266  （本地保留最近 ${localKeep} 份，更早的自动删）
+  src/renderer/components/CloudPanel.tsx:279  （账号）
+  src/renderer/components/CloudPanel.tsx:280  登录之后，每次备份会额外往云端存一份，换电脑时能直接还原；不登录也一切正常，只是备份只在…
+  src/renderer/components/CloudPanel.tsx:389  启动器 ${b.appVersion}
+  src/renderer/components/CloudPanel.tsx:399  还原会用这份备份覆盖本机设置、账号列表、服务器列表。\n
+  src/renderer/components/CloudPanel.tsx:400  游戏实例和存档不会被动。\n\n还原前会自动把当前配置另存一份。\n\n继续？
+  src/renderer/components/CloudPanel.tsx:454  从云端还原会用这份备份覆盖本机设置、账号列表、服务器列表。\n
+  src/renderer/components/CloudPanel.tsx:455  游戏实例和存档不会被动。\n\n还原前会自动把当前配置另存一份。\n\n继续？
+  src/renderer/components/CloudPanel.tsx:487  上次备份成功：${new Date(cfg.lastBackupAt).toLocale…
+  src/renderer/components/HostedBoard.tsx:22  ${h} 小时 ${m} 分
+  src/renderer/components/HostedBoard.tsx:23  ${m} 分 ${s % 60} 秒
+  src/renderer/components/HostedBoard.tsx:24  ${s} 秒
+  src/renderer/components/HostedBoard.tsx:41  ${Math.floor(diff / 60_000)} 分钟前
+  src/renderer/components/HostedBoard.tsx:42  ${Math.floor(diff / 3_600_000)} 小时前
+  src/renderer/components/HostedBoard.tsx:43  ${Math.floor(diff / 86_400_000)} 天前
+  src/renderer/components/HostedBoard.tsx:98  保存失败：${friendlyError(e)}
+  src/renderer/components/HostedBoard.tsx:117  搜索失败：${friendlyError(e)}
+  src/renderer/components/HostedBoard.tsx:134  取版本失败：${friendlyError(e)}
+  src/renderer/components/HostedBoard.tsx:148  已安装 ${res.fileName}（${fmtBytes(res.bytes)}），…
+  src/renderer/components/HostedBoard.tsx:152  安装失败：${friendlyError(e)}
+  src/renderer/components/HostedBoard.tsx:165  已卸载 ${fileName}（挪到 .trash 了，后悔还能捞回来）
+  src/renderer/components/HostedBoard.tsx:168  卸载失败：${friendlyError(e)}
+  src/renderer/components/HostedBoard.tsx:178  操作失败：${friendlyError(e)}
+  src/renderer/components/HostedBoard.tsx:208  ${m.players.length} 人
+  src/renderer/components/HostedBoard.tsx:212  ${m.mods} 个
+  src/renderer/components/HostedBoard.tsx:321  已备份：${file}
+  src/renderer/components/HostedBoard.tsx:324  备份失败：${friendlyError(e)}
+  src/renderer/components/HostedBoard.tsx:391  已归档（原日志 ${res.sizeMb}MB）
+  src/renderer/components/HostedBoard.tsx:391  没到阈值，当前 ${res.sizeMb}MB
+  src/renderer/components/ModGraph.tsx:369  · 缺 ${s.missingCount} 个前置
+  src/renderer/components/ModGraph.tsx:370  · ${s.cycleCount} 处循环依赖
+  src/renderer/components/ModGraph.tsx:461  · 已禁用
+  src/renderer/components/ModpackSearch.tsx:93  读取版本列表失败：${friendlyError(e)}
+  src/renderer/components/ModpackSearch.tsx:128  这个版本没有可下载的文件
+  src/renderer/components/ModpackSearch.tsx:130  开始安装整合包 ${label}…这会自动装对应版本与加载器
+  src/renderer/components/ModpackSearch.tsx:137  整合包安装失败：${friendlyError(e)}
+  src/renderer/components/ModpackSearch.tsx:155  导入失败：${friendlyError(e)}
+  src/renderer/components/ModpackSearch.tsx:165  打不开浏览器，链接：${url}
+  src/renderer/components/ModpackSearch.tsx:327  不限加载器
+  src/renderer/components/ModpackSearch.tsx:382  / 共
+  src/renderer/components/RoomManifestCard.tsx:64  生成失败：${(e as Error).message}
+  src/renderer/components/RoomManifestCard.tsx:86  缺 ${d.missing.length} 个、版本对不上 ${d.mismatch.l…
+  src/renderer/components/RoomManifestCard.tsx:101  要下载 ${fmtBytes(diff.downloadBytes)}（${diff.m…
+  src/renderer/components/RoomManifestCard.tsx:110  下了 ${r.downloaded} 个（${fmtBytes(r.bytes)}），有…
+  src/renderer/components/RoomManifestCard.tsx:112  补齐完成：${r.downloaded} 个文件（${fmtBytes(r.bytes)…
+  src/renderer/components/RoomManifestCard.tsx:117  补齐失败：${(e as Error).message}
+  src/renderer/components/RoomManifestCard.tsx:195  补齐缺的（${pending} 个 · ${fmtBytes(diff.download…
+  src/renderer/components/SaveWorkshop.tsx:26  ${Math.max(1, Math.round(diff / 60000))} 分钟前
+  src/renderer/components/SaveWorkshop.tsx:27  ${Math.round(diff / 3600_000)} 小时前
+  src/renderer/components/SaveWorkshop.tsx:53  读存档列表失败：${(e as Error).message}
+  src/renderer/components/SaveWorkshop.tsx:116  要改「${info?.world.name ?? pick}」的 ${Object.ke…
+  src/renderer/components/SaveWorkshop.tsx:124  ${r.skipped.length} 项没改：${r.skipped[0].reaso…
+  src/renderer/components/SaveWorkshop.tsx:139  快照已保存：${file}
+  src/renderer/components/SaveWorkshop.tsx:142  快照失败：${(e as Error).message}
+  src/renderer/components/SaveWorkshop.tsx:297  保存 ${Object.keys(patch).length} 项改动
+  src/renderer/components/ShareCard.tsx:18  玩了 ${min} 分钟
+  src/renderer/components/ShareCard.tsx:21  玩了 ${h} 小时 ${m} 分
+  src/renderer/components/ShareCard.tsx:21  玩了 ${h} 小时
+  src/renderer/components/ShareCard.tsx:28  这张图读不出来
+  src/renderer/components/ShareCard.tsx:157  ${modCount} 个模组
+  src/renderer/components/ShareCard.tsx:170  这次玩了 ${Math.round(sessionMs / 60_000)} 分钟
+  src/renderer/components/ShareCard.tsx:196  画布还没准备好
+  src/renderer/components/ShareCard.tsx:207  保存失败：${(e as Error).message}
+  src/renderer/components/ShareCard.tsx:218  复制失败：${(e as Error).message}
+  src/renderer/joinWithSync.ts:41  进不去：服务器是 ${diff.versionMismatch.server}，你选的实…
+  src/renderer/joinWithSync.ts:49  进不去：服务器用 ${diff.loaderMismatch.server}，你的实例是…
+  src/renderer/joinWithSync.ts:59  服务器要 ${diff.missing.length} 个模组（${mb} MB），自动…
+  src/renderer/joinWithSync.ts:68  还有 ${still.length} 个没下全，改用「整包直传」再试一次…
+  src/renderer/joinWithSync.ts:85  等 ${still.length} 个
+  src/renderer/joinWithSync.ts:90  服务器要的模组里还有 ${still.length} 个没弄到（${names}${mo…
+  src/renderer/joinWithSync.ts:97  已自动补齐 ${added} 个模组
+  src/renderer/views/Download.tsx:123  开始安装 ${instance.name}…
+  src/renderer/views/Download.tsx:129  安装失败：${friendlyError(e)}
+  src/renderer/views/Home.tsx:79  校验
+  src/renderer/views/Home.tsx:115  ，${info.accounts} 个账号也一起找回来了
+  src/renderer/views/Home.tsx:116  接着用之前的数据了：${where}${acc}
+  src/renderer/views/Home.tsx:173  已清空 ${r.cleared} 个账号（备份在 accounts.json.bak）
+  src/renderer/views/Home.tsx:320  …另外还有 ${bad.length - 5} 条
+  src/renderer/views/Home.tsx:338  启动失败：${friendlyError(e)}
+  src/renderer/views/Home.tsx:352  操作失败：${friendlyError(e)}
+  src/renderer/views/Home.tsx:511  已导出到 ${p}
+  src/renderer/views/Home.tsx:583  已切到本机数据：${r.instances} 个实例、${r.accounts} 个账号
+  src/renderer/views/Home.tsx:587  切换失败：${friendlyError(e)}
+  src/renderer/views/Hosting.tsx:261  创建失败：${friendlyError(e)}
+  src/renderer/views/Hosting.tsx:313  模组清单已开在 ${m.port} 端口：好友用 WFMC 进服前会自动检查并补 mod…
+  src/renderer/views/Hosting.tsx:319  启动失败：${friendlyError(e)}
+  src/renderer/views/Hosting.tsx:394  已备份：${file}
+  src/renderer/views/Hosting.tsx:396  备份失败：${friendlyError(e)}
+  src/renderer/views/Hosting.tsx:421  「${s.name}」的存档会一起删掉，确定？
+  src/renderer/views/Hosting.tsx:450  已发送「${label}」
+  src/renderer/views/Hosting.tsx:604  导入失败：${friendlyError(e)}
+  src/renderer/views/Hosting.tsx:621  导入失败：${friendlyError(e)}
+  src/renderer/views/Hosting.tsx:778  保存失败：${friendlyError(e)}
+  src/renderer/views/Instances.tsx:53  没有找到 ${LOADER_LABEL[loader]} 给 ${instance.mc…
+  src/renderer/views/Instances.tsx:72  装好了：${LOADER_LABEL[loader]} ${ver}，以后启动就走这个版…
+  src/renderer/views/Instances.tsx:76  安装失败：${friendlyError(e)}
+  src/renderer/views/Instances.tsx:131  正在拉 ${LOADER_LABEL[loader]} 版本…
+  src/renderer/views/Instances.tsx:159  切换到这个版本（${LOADER_LABEL[loader]} ${ver} 已装过）
+  src/renderer/views/Instances.tsx:160  给这个实例装 ${LOADER_LABEL[loader]}
+  src/renderer/views/Instances.tsx:186  切换失败：${friendlyError(e)}
+  src/renderer/views/Instances.tsx:198  装完会新建 ${instance.mcVersion} 的 ${LOADER_LABEL…
+  src/renderer/views/Instances.tsx:272  没有找到 ${LOADER_LABEL[loader]} 给 ${mcVersion} …
+  src/renderer/views/Instances.tsx:310  创建失败：${friendlyError(e)}
+  src/renderer/views/Instances.tsx:343  已导入实例：${instance.name}
+  src/renderer/views/Instances.tsx:345  导入失败：${friendlyError(e)}
+  src/renderer/views/Instances.tsx:398  正在拉 ${LOADER_LABEL[loader] ?? loader} 版本…
+  src/renderer/views/Instances.tsx:475  「${i.name}」会连同游戏文件一起删除，确定？
+  src/renderer/views/Instances.tsx:591  已套用「${preset.name}」：${preset.memoryMb}MB
+  src/renderer/views/Instances.tsx:593  套用失败：${friendlyError(e)}
+  src/renderer/views/Instances.tsx:662  启动版本切换为 ${v}
+  src/renderer/views/Instances.tsx:671  删掉版本 ${v} 的文件？
+  src/renderer/views/Instances.tsx:693  检查失败：${friendlyError(e)}
+  src/renderer/views/Instances.tsx:708  就地升级到新版本？\n\n· 你改过的配置会保留，新版文件放在同目录的 .packnew…
+  src/renderer/views/Instances.tsx:723  等 ${r.keptModified.length} 个
+  src/renderer/views/Instances.tsx:730  升级失败：${friendlyError(e)}
+  src/renderer/views/Instances.tsx:742  已导出：${p}
+  src/renderer/views/Instances.tsx:753  已导出整合包：${p}
+  src/renderer/views/Instances.tsx:755  导出失败：${friendlyError(e)}
+  src/renderer/views/Instances.tsx:766  已复制为 ${copy.name}
+  src/renderer/views/Manage.tsx:143  读取失败：${(e as Error).message}
+  src/renderer/views/Manage.tsx:155  读依赖失败：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:231  · 原版
+  src/renderer/views/Manage.tsx:287  ${p.name}（${p.count} 个模组）
+  src/renderer/views/Manage.tsx:297  ，全都有中文了
+  src/renderer/views/Manage.tsx:363  打不开这个包：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:384  ，options.txt 里的引用也清了
+  src/renderer/views/Manage.tsx:388  卸载失败：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:409  补了 ${r.installed.length} 个，${r.failed} 个没装上
+  src/renderer/views/Manage.tsx:409  已装 ${r.installed.length} 个前置
+  src/renderer/views/Manage.tsx:413  补前置失败：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:423  停用失败：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:438  已启用 ${order.length} 个资源包（按顺序叠加）
+  src/renderer/views/Manage.tsx:497  体检失败：${(e as Error).message}
+  src/renderer/views/Manage.tsx:515  体检结果：${e} 条会让游戏崩或模组失效，建议先处理
+  src/renderer/views/Manage.tsx:516  体检结果：${w} 条可能让部分模组不好用（不影响启动）
+  src/renderer/views/Manage.tsx:517  体检结果：${i} 条提示，没有要处理的
+  src/renderer/views/Manage.tsx:554  正在从 Modrinth 找 ${dep}…
+  src/renderer/views/Manage.tsx:561  Modrinth 上没找到对应项目
+  src/renderer/views/Manage.tsx:568  补前置失败：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:588  启用失败：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:605  正在拉 ${label} 版本…
+  src/renderer/views/Manage.tsx:608  没找到 ${label} 给 ${target?.mcVersion} 用的版本
+  src/renderer/views/Manage.tsx:609  开始装 ${label} ${ver}，进度看右下角
+  src/renderer/views/Manage.tsx:611  装好了：${label} ${ver}，模组下次启动就会加载
+  src/renderer/views/Manage.tsx:615  装加载器失败：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:649  已备份：
+  src/renderer/views/Manage.tsx:652  备份失败：
+  src/renderer/views/Manage.tsx:695  已回滚 ${r.restored} 个文件${r.removed ?
+  src/renderer/views/Manage.tsx:699  回滚失败：
+  src/renderer/views/Manage.tsx:722  已导入 ${res.length} 项
+  src/renderer/views/Manage.tsx:745  没装上的：${res.skipped.map((s) =>
+  src/renderer/views/Manage.tsx:750  装汉化包失败：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:766  已恢复「${r.name}」：${r.fileCount} 个文件 / ${mb} MB
+  src/renderer/views/Manage.tsx:775  恢复失败：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:792  校验通过：${c.checked} 个文件全部对上，可以放心恢复
+  src/renderer/views/Manage.tsx:794  校验没通过：${c.problems.length} 个文件有问题，第一个是 ${c.p…
+  src/renderer/views/Manage.tsx:797  校验失败：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:809  把 ${target.name}（${target.mcVersion}）的存档目录整个…
+  src/renderer/views/Manage.tsx:817  已备份 ${r.worlds.length} 个存档：${r.files} 个文件（${…
+  src/renderer/views/Manage.tsx:821  备份失败：
+  src/renderer/views/Manage.tsx:858  已备份 ${r.worlds.length} 个存档（${r.files} 个文件，${…
+  src/renderer/views/Manage.tsx:861  备份失败：
+  src/renderer/views/Manage.tsx:884  ${b.worlds.length} 个存档
+  src/renderer/views/Manage.tsx:886  ${b.files} 个文件
+  src/renderer/views/Manage.tsx:901  已回滚
+  src/renderer/views/Manage.tsx:901  个文件（
+  src/renderer/views/Manage.tsx:907  回滚失败：
+  src/renderer/views/Manage.tsx:958  已打包：${r.info.fileCount} 个文件 → ${mb} MB（含 sha…
+  src/renderer/views/Manage.tsx:959  存到了 ${r.path}
+  src/renderer/views/Manage.tsx:961  打包失败：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:975  读不了这个包：${friendlyError(e)}
+  src/renderer/views/Manage.tsx:993  删掉 ${item.name}？
+  src/renderer/views/Manage.tsx:1142  发现 ${n} 个可更新模组
+  src/renderer/views/Manage.tsx:1144  检查失败：${(e as Error).message}
+  src/renderer/views/Manage.tsx:1180  ${u.file} 已更新（旧文件保留为 .old）
+  src/renderer/views/Manage.tsx:1184  更新失败：${(e as Error).message}
+  src/renderer/views/Manage.tsx:1269  已保存到 ${p}
+  src/renderer/views/Manage.tsx:1288  已导出到 ${p}
+  src/renderer/views/Manage.tsx:1302  诊断包已导出（路径和账号名已脱敏）：${p}
+  src/renderer/views/Manage.tsx:1304  导出失败：${(e as Error).message}
+  src/renderer/views/Manage.tsx:1331  · 里面有 ${packView.files.length} 个模组的中文
+  src/renderer/views/Manage.tsx:1373  删掉 ${packView.name}？存档和模组不受影响，只是界面/贴图会回到原版。
+  src/renderer/views/Manage.tsx:1381  ，options.txt 里的引用也清了
+  src/renderer/views/Manage.tsx:1386  删除失败：${friendlyError(e)}
+  src/renderer/views/Notify.tsx:29  ${unread} 条未读
+  src/renderer/views/Notify.tsx:30  ；未登录时已读只记在这台电脑上
+  src/renderer/views/Online.tsx:97  自动识别到游戏局域网端口 ${p}（已帮你填好）
+  src/renderer/views/Online.tsx:140  端口变了，模组清单已跟着换到 ${r.lanIp || lanIp}:${r.port}
+  src/renderer/views/Online.tsx:234  实例「${fresh.name}」的游戏文件不完整（上次下载大概中断了）。\n\n现在接…
+  src/renderer/views/Online.tsx:242  游戏本体没装完：${(e as Error).message}
+  src/renderer/views/Online.tsx:280  拷好了：${r.downloaded} 个文件，跳过 ${r.skipped} 个
+  src/renderer/views/Online.tsx:282  从房主拷文件失败：${(e as Error).message}
+  src/renderer/views/Online.tsx:299  本地没有「${mc} · ${loaderName(loader)}」的实例。\n\n现…
+  src/renderer/views/Online.tsx:311  实例「${inst.name}」建好了
+  src/renderer/views/Online.tsx:314  建实例失败：${(e as Error).message}
+  src/renderer/views/Online.tsx:338  没选实例，自动用「${target.name}」进服
+  src/renderer/views/Online.tsx:352  用实例「${target.name}」进服（${env.mcVersion} · ${l…
+  src/renderer/views/Online.tsx:364  进服失败：${(e as Error).message}
+  src/renderer/views/Online.tsx:454  没扫到正在开的房间：先在游戏里点「对局域网开放」再扫一次
+  src/renderer/views/Online.tsx:457  扫到 ${rows[0].port} 端口上的房间，已帮你填好
+  src/renderer/views/Online.tsx:459  扫到 ${rows.length} 个端口，点一个填进输入框
+  src/renderer/views/Online.tsx:462  扫描失败：${(e as Error).message}
+  src/renderer/views/Online.tsx:482  · ${s.players.online}/${s.players.max} 人
+  src/renderer/views/Online.tsx:515  游戏里点过「对局域网开放」之后，启动器会自动发布；这里可以手动补一次
+  src/renderer/views/Online.tsx:545  <你的内网IP>
+  src/renderer/views/Online.tsx:661  分享失败：${(e as Error).message}
+  src/renderer/views/Online.tsx:689  ${r.message}；模组清单端口 ${port + 1} 也已映射（房主那边开着 …
+  src/renderer/views/Online.tsx:697  把 ${port} 端口映射到公网
+  src/renderer/views/Online.tsx:740  公网地址：${st.publicAddress}
+  src/renderer/views/Online.tsx:743  穿透失败：${(e as Error).message}
+  src/renderer/views/Online.tsx:869  房间码无效：${(e as Error).message}
+  src/renderer/views/Resources.tsx:20  中文 Minecraft Wiki
+  src/renderer/views/Resources.tsx:21  光影大全
+  src/renderer/views/Resources.tsx:22  服务器列表
+  src/renderer/views/Resources.tsx:108  已收藏 ${h.title}
+  src/renderer/views/Resources.tsx:133  打不开浏览器，链接：${url}
+  src/renderer/views/Resources.tsx:213  读取版本列表失败：${(e as Error).message}
+  src/renderer/views/Resources.tsx:239  ${target.name} 还没装好游戏本体，装完模组也起不来
+  src/renderer/views/Resources.tsx:246  读取依赖失败：${(e as Error).message}
+  src/renderer/views/Resources.tsx:260  开始安装「${rootTitle}」，进度看右下角
+  src/renderer/views/Resources.tsx:264  装了 ${res.installed.length} 个
+  src/renderer/views/Resources.tsx:265  已有 ${res.skipped.length} 个
+  src/renderer/views/Resources.tsx:266  失败 ${res.failed.length} 个
+  src/renderer/views/Resources.tsx:267  没东西可装
+  src/renderer/views/Resources.tsx:271  「${rootTitle}」安装失败：${(e as Error).message}
+  src/renderer/views/Resources.tsx:297  CF 搜索失败：${(e as Error).message}
+  src/renderer/views/Resources.tsx:332  · 本体未安装
+  src/renderer/views/Resources.tsx:404  搜索${kindLabel[kind]}…
+  src/renderer/views/Resources.tsx:540  不限加载器
+  src/renderer/views/Resources.tsx:599  / 共
+  src/renderer/views/Resources.tsx:600  （到底了，再点回到开头）
+  src/renderer/views/Resources.tsx:640  已删除 ${f.name}
+  src/renderer/views/Resources.tsx:643  删除失败：${(e as Error).message}
+  src/renderer/views/Resources.tsx:731  已安装 ${hit.name}
+  src/renderer/views/Resources.tsx:733  ${hit.name} 安装失败：${(e as Error).message}
+  src/renderer/views/Resources.tsx:772  已安装 ${hit.name}
+  src/renderer/views/Resources.tsx:774  安装失败：${(e as Error).message}
+  src/renderer/views/Resources.tsx:853  开始安装（${1 + plan.data.required.filter((d) => …
+  src/renderer/views/Servers.tsx:49  进服实例：${current.name}
+  src/renderer/views/Servers.tsx:112  ${queryResult.players?.online ?? 0}/${queryR…
+  src/renderer/views/Servers.tsx:116  版本 ${queryResult.version}
+  src/renderer/views/Servers.tsx:181  进服失败：${friendlyError(e)}
+  src/renderer/views/Settings.tsx:551  清理了 ${res.removed} 个临时文件，释放 ${formatSize(res…
+  src/renderer/views/Settings.tsx:667  旧目录 ${old.dir} 里还有 ${old.instances} 个实例、${ol…
+  src/renderer/views/Settings.tsx:668  要复制到新目录 ${dir} 吗？只复制不删旧目录，确认新目录没问题后旧目录你自己清理。
+  src/renderer/views/Settings.tsx:692  迁移完成：复制 ${m.copied} 个文件（${formatSize(m.bytes…
+  src/renderer/views/Settings.tsx:705  换目录失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:731  已切到本机数据：${r.instances} 个实例
+  src/renderer/views/Settings.tsx:781  已切到 ${r.dir}：${r.instances} 个实例、${r.accounts…
+  src/renderer/views/Settings.tsx:783  切换失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:812  以上（超时没走完）
+  src/renderer/views/Settings.tsx:831  已清空 ${r.cleared} 个账号（备份 accounts.json.bak）
+  src/renderer/views/Settings.tsx:833  清空失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:852  已清空 ${r.cleared} 个实例的游玩记录
+  src/renderer/views/Settings.tsx:854  清空失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:902  ，账号已备份成 .bak
+  src/renderer/views/Settings.tsx:906  删除失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:935  统计失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:964  清理${it.label}
+  src/renderer/views/Settings.tsx:972  已清理 ${r.files} 个文件，空出 ${formatSize(r.bytes)}
+  src/renderer/views/Settings.tsx:976  清理失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:1048  已安装：${p}
+  src/renderer/views/Settings.tsx:1049  已装好：${p}
+  src/renderer/views/Settings.tsx:1051  安装失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:1052  安装失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:1098  已切换到 ${a.name}
+  src/renderer/views/Settings.tsx:1135  添加失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:1153  正版登录成功：${account.name}
+  src/renderer/views/Settings.tsx:1155  正版登录失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:1208  下载失败：${(e as Error).message}
+  src/renderer/views/Settings.tsx:1308  当前已保存（尾号 ${settings.curseforgeApiKey.slice(-…
+  src/renderer/views/Settings.tsx:1369  WFMC ${appVersion} · WanFan Minecraft Launch…
+  src/renderer/views/Skin.tsx:312  登录成功：${res.account.name}
+  src/renderer/views/Skin.tsx:314  登录失败：${(e as Error).message}
+  src/renderer/views/Skin.tsx:329  已识别验证服务器：${parsed}
+  src/renderer/views/Skin.tsx:352  上传失败：${(e as Error).message}
+  src/renderer/views/Skin.tsx:408  下载失败：${(e as Error).message}
+  src/renderer/views/Skin.tsx:421  已填入：${url}
+  src/renderer/views/Skin.tsx:446  已切换到角色 ${p.name}
+  src/renderer/views/Skin.tsx:448  切换失败：${(e as Error).message}
+  src/renderer/views/Skin.tsx:559  清除失败：${(e as Error).message}
+  src/renderer/views/Skin.tsx:596  已启用 ${a.name}
+  src/renderer/views/TaskPanel.tsx:167  已暂停 · 点「继续」接着跑${task.phase ?
+  src/renderer/views/TaskPanel.tsx:190  · ${running.length} 个进行中${paused.length ?
+  src/renderer/views/TaskPanel.tsx:191  · 空闲
+  src/renderer/views/UpdateCenter.tsx:173  已经是最新版本
+  src/renderer/views/UpdateCenter.tsx:176  检查更新失败：${friendlyError(e)}
+  src/renderer/views/UpdateCenter.tsx:193  增量更新：只下了 ${fmtSize(res.deltaBytes ?? 0)}（省下 …
+  src/renderer/views/UpdateCenter.tsx:200  更新失败：${friendlyError(e)}
+  src/renderer/views/UpdateCenter.tsx:213  检查更新
+  src/renderer/views/UpdateCenter.tsx:215  当前版本
+  src/renderer/views/UpdateCenter.tsx:217  已发布
+  src/renderer/views/UpdateCenter.tsx:217  个版本
+  src/renderer/views/UpdateCenter.tsx:223  检查中…
+  src/renderer/views/UpdateCenter.tsx:223  立即检查
+  src/renderer/views/UpdateCenter.tsx:233  收起历史更新
+  src/renderer/views/UpdateCenter.tsx:233  历史更新
+  src/renderer/views/UpdateCenter.tsx:244  新版本可用
+  src/renderer/views/UpdateCenter.tsx:252  个安装包
+  src/renderer/views/UpdateCenter.tsx:255  只下载与当前版本的差异部分
+  src/renderer/views/UpdateCenter.tsx:256  增量更新仅需
+  src/renderer/views/UpdateCenter.tsx:264  准备下载…
+  src/renderer/views/UpdateCenter.tsx:266  增量更新
+  src/renderer/views/UpdateCenter.tsx:270  收起历史更新
+  src/renderer/views/UpdateCenter.tsx:270  历史更新
+  src/renderer/views/UpdateCenter.tsx:279  已经是最新版本
+  src/renderer/views/UpdateCenter.tsx:286  新版本更新内容
+  src/renderer/views/UpdateCenter.tsx:294  历史更新（从新到旧）
+  src/renderer/views/UpdateCenter.tsx:295  个版本
+  src/renderer/views/UpdateCenter.tsx:300  还没读到历史版本。点上方「立即检查」拉一次；或者当前更新源只提供了单个版本。
+  src/renderer/views/UpdateCenter.tsx:314  最新
+  src/renderer/views/UpdateCenter.tsx:350  更新源
+  src/renderer/views/UpdateCenter.tsx:366  开机自动检查更新
+  src/renderer/views/UpdateCenter.tsx:369  支持 GitHub Releases，填「用户名/仓库名」或 releases 地址

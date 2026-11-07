@@ -1,17 +1,22 @@
 import React, { useEffect, useState } from 'react'
-import { api, formatSize, friendlyError, type ModIssue, type ModUpdateItem } from '../api'
+import { api, formatSize, friendlyError, type ModIssue, type ModUpdateItem, type ModGraph as ModGraphData } from '../api'
+import ModGraphView from '../components/ModGraph'
+import SaveWorkshop from '../components/SaveWorkshop'
+import ShareCard from '../components/ShareCard'
 import { useLauncher, useT } from '../store'
 import { takeDeepLink } from '../deeplink'
 import type { ContentItem, ContentKind, CrashDiagnosis, CrashReport, SaveBackup } from '../../shared/types'
 import type { PageId } from '../App'
 
-type Tab = ContentKind | 'crash' | 'log' | 'updates' | 'shots' | 'datapacks'
+type Tab = ContentKind | 'crash' | 'log' | 'updates' | 'shots' | 'datapacks' | 'deps' | 'workshop'
 
 const tabs: { id: Tab; label: string }[] = [
   { id: 'mods', label: '模组' },
+  { id: 'deps', label: '依赖' },
   { id: 'resourcepacks', label: '资源包' },
   { id: 'shaderpacks', label: '光影' },
   { id: 'saves', label: '存档' },
+  { id: 'workshop', label: '存档工坊' },
   { id: 'datapacks', label: '数据包' },
   { id: 'shots', label: '截图' },
   { id: 'updates', label: 'Mod 更新' },
@@ -32,7 +37,12 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
   const [diagnosis, setDiagnosis] = useState<CrashDiagnosis | undefined>()
   const [updates, setUpdates] = useState<ModUpdateItem[]>([])
   const [shots, setShots] = useState<{ name: string; path: string; size: number; time: number }[]>([])
+  // 分享卡：undefined = 关着；path 有值就用那一张当底图，没有就用最新一张
+  const [shareShot, setShareShot] = useState<{ path?: string } | undefined>()
   const [modIssues, setModIssues] = useState<ModIssue[]>([])
+  // 依赖图（内容管理 → 依赖）
+  const [modGraph, setModGraph] = useState<ModGraphData | undefined>()
+  const [graphLoading, setGraphLoading] = useState(false)
   // 哪几条展开了「这是什么」的说明
   const [explainOpen, setExplainOpen] = useState<Record<number, boolean>>({})
   // 用户手动忽略了这一轮结果（mods 再变会重新弹出来）
@@ -136,6 +146,18 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     }
   }
 
+  const refreshGraph = async () => {
+    if (!activeId) return
+    setGraphLoading(true)
+    try {
+      setModGraph(await api.modGraph(activeId))
+    } catch (e) {
+      toast(`读依赖失败：${friendlyError(e)}`, 'error')
+    } finally {
+      setGraphLoading(false)
+    }
+  }
+
   const refreshBackups = async () => {
     if (!activeId) return
     try {
@@ -154,6 +176,13 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     if (tab === 'saves' && showBackups) refreshBackups()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, activeId, showBackups])
+
+  // 依赖图：切到这个 tab 才读
+  useEffect(() => {
+    if (tab !== 'deps') return
+    void refreshGraph()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, activeId])
 
   // 模组页顺便算一下汉化包覆盖情况：装了没生效时能立刻看出来是哪个模组没收录
   useEffect(() => {
@@ -366,6 +395,36 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
             </div>
           )}
         </div>
+      )}
+
+      {tab === 'deps' && (
+        <ModGraphView
+          graph={modGraph}
+          loading={graphLoading}
+          onRefresh={() => void refreshGraph()}
+          onFixMissing={async (ids) => {
+            try {
+              const r = await api.fixModDeps(activeId, ids)
+              toast(
+                r.failed > 0 ? `补了 ${r.installed.length} 个，${r.failed} 个没装上` : `已装 ${r.installed.length} 个前置`,
+                r.failed > 0 ? 'error' : 'success'
+              )
+            } catch (e) {
+              toast(`补前置失败：${friendlyError(e)}`, 'error')
+            }
+            void refreshGraph()
+          }}
+          onOpenDir={() => void api.openContentDir(activeId, 'mods')}
+          onDisable={async (file) => {
+            try {
+              await api.toggleContent(activeId, file)
+              toast('已停用（文件改成 .disabled，需要时再点一次恢复）', 'success')
+            } catch (e) {
+              toast(`停用失败：${friendlyError(e)}`, 'error')
+            }
+            void refreshGraph()
+          }}
+        />
       )}
 
       {tab === 'resourcepacks' && (
@@ -744,8 +803,23 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                 <button
                   className="btn ghost"
                   onClick={async () => {
-                    const p = await api.backupSaves(activeId)
-                    p ? toast(`已备份到 ${p}`, 'success') : toast('存档目录是空的', 'info')
+                    if (
+                      !(await askConfirm({
+                        title: '备份所有存档',
+                        message: `把 ${target.name}（${target.mcVersion}）的存档目录整个打成一个 zip 快照？`,
+                        okText: '开始备份'
+                      }))
+                    )
+                      return
+                    try {
+                      const r = await api.backupSaves(activeId)
+                      if (!r) return toast('存档目录是空的，没什么可备份', 'info')
+                      toast(`已备份 ${r.worlds.length} 个存档：${r.files} 个文件（${formatSize(r.bytes)}）`, 'success')
+                      setShowBackups(true)
+                      await refreshBackups()
+                    } catch (e) {
+                      toast('备份失败：' + friendlyError(e), 'error')
+                    }
                   }}
                 >
                   备份所有存档
@@ -779,9 +853,9 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
               className="btn sm ghost"
               onClick={async () => {
                 try {
-                  const file = await api.backupSaves(activeId)
-                  if (!file) return toast('存档目录是空的，没什么可备份', 'info')
-                  toast('已备份：' + file.split(/[\\/]/).pop(), 'success')
+                  const r = await api.backupSaves(activeId)
+                  if (!r) return toast('存档目录是空的，没什么可备份', 'info')
+                  toast(`已备份 ${r.worlds.length} 个存档（${r.files} 个文件，${formatSize(r.bytes)}）`, 'success')
                   await refreshBackups()
                 } catch (e) {
                   toast('备份失败：' + friendlyError(e), 'error')
@@ -789,6 +863,9 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
               }}
             >
               立即备份
+            </button>
+            <button className="btn sm ghost" onClick={() => void api.openBackupsDir()}>
+              打开备份文件夹
             </button>
             <button className="btn sm" onClick={() => setShowBackups(false)}>收起</button>
           </div>
@@ -802,16 +879,26 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                   <div className="content-main">
                     <div className="content-name">{new Date(b.time).toLocaleString('zh-CN', { hour12: false })}</div>
                     <div className="content-desc" title={b.file}>{b.name}</div>
+                    {(b.worlds?.length || b.files) && (
+                      <div className="muted small" style={{ marginLeft: 40, marginTop: -6, marginBottom: 4 }}>
+                        {b.worlds?.length ? `${b.worlds.length} 个存档` : ''}
+                        {b.worlds?.length && b.files ? ' · ' : ''}
+                        {b.files ? `${b.files} 个文件` : ''}
+                      </div>
+                    )}
                   </div>
                   <span className="muted small">{formatSize(b.bytes)}</span>
                   <span className="row">
+                    <button className="btn sm ghost" onClick={() => void api.revealBackup(b.file)}>
+                      打开所在文件夹
+                    </button>
                     <button
                       className="btn sm"
                       onClick={async () => {
                         if (!(await askConfirm({ title: '回滚存档', message: '把存档回滚到这份快照？回滚前会先自动备份当前存档。', okText: '回滚' }))) return
                         try {
                           const r = await api.restoreSaveBackup(activeId, b.file)
-                          toast('已回滚 ' + r.restored + ' 个文件（' + (r.worlds.join('、') || '存档') + '）', 'success')
+                          toast(`已回滚 ${r.restored} 个文件（${r.worlds.join('、') || '存档'}）`, 'success')
                           if (r.safetyBackup) toast('回滚前的存档也留了一份，后悔了还能退回来', 'info')
                           await refresh()
                           await refreshBackups()
@@ -989,6 +1076,8 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
         </div>
       )}
 
+      {tab === 'workshop' && <SaveWorkshop instanceId={activeId} />}
+
       {tab === 'shots' && (
         <div className="card">
           <div className="row wrap">
@@ -997,6 +1086,9 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
             </button>
             <button className="btn" onClick={() => api.openScreenshotsDir(activeId)}>
               打开截图目录
+            </button>
+            <button className="btn" onClick={() => setShareShot({})} disabled={!target}>
+              做分享卡
             </button>
             <span className="muted small">
               共 {shots.length} 张（游戏里 F2 截的图会出现在这里）
@@ -1014,6 +1106,9 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                   <span className="row">
                     <button className="btn sm" onClick={() => api.openPath(s.path)}>
                       打开
+                    </button>
+                    <button className="btn sm" onClick={() => setShareShot({ path: s.path })}>
+                      分享卡
                     </button>
                     <button
                       className="btn sm danger"
@@ -1218,6 +1313,10 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
             {lines.length ? lines.join('\n') : '还没有日志，去首页启动一次游戏。'}
           </pre>
         </div>
+      )}
+
+      {shareShot && target && (
+        <ShareCard instance={target} shotPath={shareShot.path} onClose={() => setShareShot(undefined)} />
       )}
 
       {packView && (

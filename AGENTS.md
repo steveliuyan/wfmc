@@ -18,6 +18,7 @@
 cd H:\mcqidongqi
 npm run typecheck
 npm run build          # 或 npm run dist（含打包）
+npm run i18n:check     # 渲染层中文文案覆盖率卡口（低于 98% 会 exit 1），漏翻用 npm run i18n -- --list 逐条看
 ```
 
 - 版本号只改 `package.json` 的 `"version"`。
@@ -36,6 +37,26 @@ npm run dist          # → release\WFMC-Portable-X.Y.Z.exe + WFMC-Setup-X.Y.Z.e
 - 增量补丁（可选）：`node scripts/make-delta.mjs release\WFMC-Setup-旧.exe release\WFMC-Setup-新.exe release\WFMC-Setup-旧-to-新.wdelta`。
   发布脚本只传 `.exe`，`.wdelta` 需要单独处理。
 - 改过 `build/installer.nsh` 或向导位图，必须重打 Setup 并在安装向导里亲眼过一遍。
+
+### 2.1 代码签名（骨架已就位，等证书）
+
+`package.json` 的 `build.win.signtoolOptions` 已写好：`publisherName: "WanFan Technology"`、
+`signingHashAlgorithms: ["sha256"]`、`rfc3161TimeStampServer: "http://timestamp.digicert.com"`。
+**没有证书时 electron-builder 会静默跳过签名，打包行为和以前完全一致**——这段配置可以一直放着。
+
+买好 OV / EV 证书后只补环境变量，不改代码（同样写在单次 pwsh 里，别进任何会被推送的文件）：
+
+```powershell
+$env:CSC_LINK = 'H:\path\to\wfmc.pfx'      # 或 base64 的 pfx
+$env:CSC_KEY_PASSWORD = '证书密码'
+npm run dist                               # 两个 exe 都应带上签名
+```
+
+坑：
+- 签名后 **必须重测自动更新**：签名主体变了会让旧版本的升级路径重新触发 SmartScreen 判定，也可能走到
+  `updater.ts` 不同的校验分支；发版前用 1.1.x 的旧包升一次新版本验一遍。
+- 时间戳不是必需，但**没时间戳的签名在证书过期后即失效**，别删 `rfc3161TimeStampServer`。
+- 别把 `.pfx` 放进仓库（`.gitignore` 已忽略 `*.pfx` / `*.p12`，`scripts/opensource.mjs` 也会跳过 `.local`）。
 
 ## 3. 更新说明
 

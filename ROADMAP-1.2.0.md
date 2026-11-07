@@ -1,6 +1,6 @@
 # WFMC 1.2.0 路线图（六大方向 · 文件级实施计划）
 
-> 状态：计划稿（2026-11-06）。发版流程见 `AGENTS.md` §4，别凭记忆。
+> 状态：**六条已全部落地，随 1.2.0 交付**（2026-11-08）；F3 代码签名只差证书，配置骨架已进 `package.json`。发版流程见 `AGENTS.md` §4，别凭记忆。
 > 六条都做，但**分三个版本交付**：1.1.0 → 1.2.0 → 1.3.0。原因见 §0.2。
 
 ---
@@ -215,14 +215,23 @@
 
 ### F2. 界面全量 i18n（1.3.0，~3 天）
 
-- 现状：`translate(settings.language, key, fallback)` 只覆盖导航和常用按钮；
-- 做法：新建 `src/renderer/i18n/zh.json` / `en.json`，按 `页面.区块` 命名；`Settings` 里已有语言选择；
-- 顺序：Settings → Home → Instances → Content（Manage）→ 其余；
-- 验收：切英文后常用路径无中文残留（写个脚本扫 `.tsx` 里未走 `t()` 的中文字符串，当 CI 检查）。
+- 现状（已落地）：不走「逐条包 t()」，走**运行时换文案**——`settings.language === 'en'` 时
+  `autoI18n.ts` 用 MutationObserver 扫文本节点，按三层匹配：
+  ① 词典整段精确命中（`i18n-zh.ts` + `i18n-parts/*.ts`）；
+  ② `i18n-dynamic.ts` 的正则处理带变量的模板串（`安装失败：${msg}`、`已备份 ${n} 个存档`）；
+  ③ 兜底：用 ≥4 字的长词做事逐词替换（拼接串）。
+- 词典按页面拆成 `src/renderer/i18n-parts/{app,instances,manage,settings,resources,online,hosting,misc}.ts`，
+  分头补互不冲突；`index.ts` 汇总后与 `i18n-zh.ts` 的 PAIRS 合并。
+- CI 卡口：`npm run i18n:check`（= `node scripts/i18n-scan.mjs --min 98`）。扫描器**直接用
+  `i18n-dynamic.ts` 的同一套规则**判断模板串运行期会不会被翻掉，不另抄一份；`--list` 逐条列漏翻。
+- 验收：`npm run i18n` 报「渲染层中文字面量 1187 条 / 完全没翻 0 / 覆盖率 100%」。
+- 已知局限：JSX 里被 `<strong>`、表达式切开的片段必须按**单个文本节点**入表；`askConfirm` 的
+  多行文案靠 `[\s\S]` 规则与词典里的真换行 key 命中（扫描器已把 `\n` 反转义后再比对）。
 
-### F3. 代码签名（1.3.0，等证书，~0.5 天）
+### F3. 代码签名（等证书，~0.5 天）
 
-- `electron-builder` 加 `win.signtoolOptions` 或 `certificateSubjectName`；
+- ✅ 骨架已落地：`package.json` → `build.win.signtoolOptions` = `{ publisherName, signingHashAlgorithms: [sha256], rfc3161TimeStampServer }`；
+  无证书时 electron-builder 静默跳过签名，打包行为不变。买好证书只需设 `CSC_LINK` / `CSC_KEY_PASSWORD`，详见 `AGENTS.md` §2.1。
 - 需买 OV/EV 证书；买前先在 `AGENTS.md` 里记一笔「签名后必须重测自动更新」（签名变了会导致旧版本升级路径重新触发 SmartScreen 判定）。
 
 ---

@@ -22,7 +22,7 @@ import {
 import { gamePathFor } from './paths'
 import { diagnoseMods } from './moddoctor'
 import { disableResourcePack } from './options'
-import { createBackup, listBackups, pruneBackups, restoreBackup } from './savebackup'
+import { createBackup, listBackups, pruneBackups, restoreBackup, type SavesBackupResult } from './savebackup'
 import {
   createModsBackup,
   listModsBackups,
@@ -309,10 +309,23 @@ export function contentDir(instanceId: string, kind: ContentKind): string {
   return dir
 }
 
-/** 备份存档目录成 zip，返回备份文件路径 */
-export function backupSaves(instanceId: string): string | undefined {
+/**
+ * 备份存档目录成 zip。
+ * 返回的不只是路径 —— 还带上「装了哪几个存档」，界面上要显示出来，
+ * 免得用户打完包不知道里面到底有什么。
+ */
+export function backupSaves(instanceId: string): SavesBackupResult | undefined {
   const root = instanceRoot(instanceId)
-  return createBackup(path.join(root, 'saves'), store.backupsDir, instanceId)
+  const inst = store.getInstance(instanceId)
+  return createBackup(path.join(root, 'saves'), store.backupsDir, instanceId, new Date(), {
+    instanceName: inst?.name,
+    mcVersion: inst?.mcVersion
+  })
+}
+
+/** 备份目录（存档快照都放这儿），打开文件夹用 */
+export function savesBackupDir(): string {
+  return store.backupsDir
 }
 
 /** 列出这个实例的存档快照（新的在前） */
@@ -331,7 +344,7 @@ export function pruneSaveBackups(instanceId: string, keep = 12): number {
  */
 export function restoreSaveBackup(instanceId: string, backupFile: string): RestoreBackupResult {
   const root = instanceRoot(instanceId)
-  const safetyBackup = backupSaves(instanceId)
+  const safetyBackup = backupSaves(instanceId)?.file
   const { restored, worlds } = restoreBackup(path.join(root, 'saves'), store.backupsDir, backupFile)
   pruneSaveBackups(instanceId)
   return { restored, safetyBackup, worlds }

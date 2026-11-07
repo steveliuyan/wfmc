@@ -3,6 +3,7 @@ import lottie from 'lottie-web'
 import { api, friendlyError, formatDuration, formatLastPlayed, formatSize, progressPercent, progressText } from '../api'
 import { useLauncher, useT } from '../store'
 import symbolAnim from '../assets/lottie-symbol.json'
+import ShareCard from '../components/ShareCard'
 import type { PageId } from '../App'
 
 // 默认落位：左边数据面板、右边启动日志（两块并排等高），快捷操作整行放下面
@@ -46,6 +47,21 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
 
   const state = currentId ? launchState[currentId] : undefined
   const lines = currentId ? logs[currentId] ?? [] : []
+  // 本次游玩总结：游戏从 running 变成 exited 时弹一次分享卡，记一下这次玩了多久
+  const [summary, setSummary] = useState<{ id: string; ms: number } | undefined>()
+  const prevLaunch = useRef<string | undefined>(undefined)
+  const playStartedAt = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    const now = state?.state
+    if (now === 'running' && prevLaunch.current !== 'running') playStartedAt.current = Date.now()
+    if (now === 'exited' && prevLaunch.current === 'running' && currentId) {
+      const ms = playStartedAt.current ? Date.now() - playStartedAt.current : 0
+      playStartedAt.current = undefined
+      // 只在本页还开着、且这次玩够 2 分钟时才弹，免得刚点启动就被弹窗糊一脸
+      if (ms > 120_000 && localStorage.getItem('shareSummaryOff') !== '1') setSummary({ id: currentId, ms })
+    }
+    prevLaunch.current = now
+  }, [state?.state, currentId])
   // 折叠状态存本地：切页面回来 / 重开软件都还是上次的样子
   const [logCollapsed, setLogCollapsed] = useState(() => localStorage.getItem('logCollapsed') === '1')
   const toggleLog = () => {
@@ -726,6 +742,23 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
           </div>
         ))}
       </div>
+
+      {/* 本次游玩总结：玩够了才弹，且只弹这一次 */}
+      {summary && (() => {
+        const ins = instances.find((i) => i.id === summary.id)
+        if (!ins) return null
+        return (
+          <ShareCard
+            instance={ins}
+            sessionMs={summary.ms}
+            onMute={() => {
+              localStorage.setItem('shareSummaryOff', '1')
+              setSummary(undefined)
+            }}
+            onClose={() => setSummary(undefined)}
+          />
+        )
+      })()}
 
       {/* 拿起来的那张卡浮在鼠标上 */}
       {dragId && dragPos && (

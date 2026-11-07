@@ -1,8 +1,8 @@
-import { BrowserWindow, app, clipboard, dialog, ipcMain, net, shell } from 'electron'
+import { BrowserWindow, app, clipboard, dialog, ipcMain, nativeImage, net, shell } from 'electron'
 import fs from 'node:fs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
-import type { CloudSettings, ContentKind, Instance, ProgressPayload, Settings, StorageKind } from '../shared/types'
+import type { CloudSettings, ContentKind, Instance, LevelPatch, ProgressPayload, RoomManifestPayload, Settings, StorageKind } from '../shared/types'
 import {
   cloudAccount,
   cloudStatus,
@@ -69,6 +69,7 @@ import {
   readCrashReport,
   restoreModsBackupSnapshot,
   restoreSaveBackup,
+  savesBackupDir,
   toggleContent
 } from './content'
 import { exportDiagnostics, moveResourcePack, readResourcePackOrder, toggleResourcePack } from './content'
@@ -113,13 +114,42 @@ import {
   stopHosted,
   writeServerProperties
 } from './serverhost'
+import {
+  addBan,
+  logHostedLine,
+  hostedMemory,
+  hostedPlayerAction,
+  parseOnlinePlayers,
+  readBanList,
+  removeBan
+} from './serverhost'
+import {
+  handleHostedExit,
+  pruneBackups,
+  readSched,
+  rotateLogs,
+  startScheduler,
+  writeSched,
+  type SchedHooks
+} from './serversched'
+import {
+  addonDir,
+  installAddon,
+  listAddonVersions,
+  listInstalledAddons,
+  removeAddon,
+  searchAddons
+} from './serveraddons'
 import { applyModUpdate, checkModUpdates } from './modupdates'
 import { ensureInjector, loginThirdParty, refreshThirdParty, listProfiles, selectProfile, lookupSkin, uploadSkin, uploadCape, clearTexture, parseInjectorCard } from './authlib'
 import { decodeRoomCode, encodeRoomCode } from './rooms'
+import { applyManifestDiff, decodeManifest, diffManifest, encodeManifest, localModsOf, manifestOfInstance } from './roommanifest'
+import { inspectSave, listSaves as listSaveWorlds, patchLevel, snapshotLevel } from './saveedit'
 import { applyPerfPreset, deleteScreenshot, listScreenshots, PERF_PRESETS, screenshotsDir } from './shots'
 import { cancelTask, clearFinishedTasks, listTasks, pauseTask, resumeTask, runTask, setTaskEmitter } from './tasks'
 import { applyBestUpdate, applyUpdate, checkReleases, checkUpdate, pickAsset } from './updater'
 import { diagnoseMods } from './moddoctor'
+import { buildGraph } from './modgraph'
 import { setModsDiagnosisListener, startModWatch, stopModWatch } from './modwatch'
 import { fixMissingDeps } from './moddeps'
 import { installLangPacks, inspectLangPack, readPackContents, removeLangPacks, removePack } from './langpack'
@@ -421,6 +451,19 @@ ipcMain.handle('data:size', () => store.dataSize())
     await shell.openPath(contentDir(instanceId, kind))
   })
   ipcMain.handle('saves:backup', (_e, instanceId: string) => backupSaves(instanceId))
+  // 在资源管理器里选中某个快照 zip；路径必须落在备份目录里，别让它乱开
+  ipcMain.handle('saves:reveal-backup', async (_e, file: string) => {
+    const dir = path.resolve(savesBackupDir())
+    const full = path.resolve(file)
+    if (full !== dir && !full.startsWith(dir + path.sep)) throw new Error('只能打开备份目录里的快照')
+    if (fs.existsSync(full)) shell.showItemInFolder(full)
+    else await shell.openPath(dir)
+  })
+  ipcMain.handle('saves:open-backups-dir', async () => {
+    const dir = savesBackupDir()
+    fs.mkdirSync(dir, { recursive: true })
+    await shell.openPath(dir)
+  })
   ipcMain.handle('saves:backups', (_e, instanceId: string) => listSaveBackups(instanceId))
   ipcMain.handle('saves:restore-backup', (_e, instanceId: string, file: string) => restoreSaveBackup(instanceId, file))
   // mods 快照：折腾模组前的后悔药（更新前会自动打一份，也可以手动打）
@@ -430,6 +473,14 @@ ipcMain.handle('data:size', () => store.dataSize())
     restoreModsBackupSnapshot(instanceId, file)
   )
   ipcMain.handle('saves:prune-backups', (_e, instanceId: string, keep?: number) => pruneSaveBackups(instanceId, keep))
+
+  // ---------- 存档工坊（E 方向）：只改白名单字段，改前强制快照 ----------
+  ipcMain.handle('saves:worlds', (_e, instanceId: string) => listSaveWorlds(instanceId))
+  ipcMain.handle('saves:inspect-world', (_e, instanceId: string, folder: string) => inspectSave(instanceId, folder))
+  ipcMain.handle('saves:snapshot-level', (_e, instanceId: string, folder: string) => snapshotLevel(instanceId, folder))
+  ipcMain.handle('saves:patch-level', (_e, instanceId: string, folder: string, patch: LevelPatch) =>
+    patchLevel(instanceId, folder, patch)
+  )
   ipcMain.handle('crash:list', (_e, instanceId: string) => listCrashReports(instanceId))
   ipcMain.handle('crash:read', (_e, instanceId: string, target: string) => readCrashReport(instanceId, target))
   ipcMain.handle('crash:diagnose', (_e, instanceId: string) => analyzeLatest(instanceId))
@@ -1028,6 +1079,8 @@ ipcMain.handle('data:size', () => store.dataSize())
 
   // ---------- Mod 体检 / 整合包导出 ----------
   ipcMain.handle('mods:diagnose', (_e, instanceId: string) => diagnoseMods(instanceId))
+  // 依赖图：谁依赖谁 / 谁和谁冲突 / 缺了哪个前置
+  ipcMain.handle('mods:graph', (_e, instanceId: string) => buildGraph(instanceId))
   // 体检常驻：盯着这个实例的 mods 目录，变了就在后台重跑并推送
   ipcMain.handle('mods:watch-start', (_e, instanceId: string) => {
     startModWatch(instanceId)
@@ -1119,11 +1172,7 @@ ipcMain.handle('data:size', () => store.dataSize())
     )
   )
   ipcMain.handle('hosted:start', async (_e, id: string) => {
-    await startHosted(
-      id,
-      (sid, line) => emit('event:host-log', { id: sid, line }),
-      (sid, code) => emit('event:host-exit', { id: sid, code })
-    )
+    await startHostedWithHooks(id)
     return true
   })
   ipcMain.handle('hosted:stop', (_e, id: string) => stopHosted(id))
@@ -1163,6 +1212,120 @@ ipcMain.handle('data:size', () => store.dataSize())
     const info = await startManifestServer(id)
     return { ...info, manifest: buildManifest(id) }
   })
+
+  // ---------- 服主面板 2.0：玩家 / 计划任务 / 插件与模组市场 ----------
+  // 起服统一走这里：日志、退出事件、看门狗都挂在同一处，避免两套回调各说各话
+  async function startHostedWithHooks(id: string) {
+    await startHosted(
+      id,
+      (sid, line) => emit('event:host-log', { id: sid, line }),
+      (sid, code) => {
+        emit('event:host-exit', { id: sid, code })
+        handleHostedExit(schedHooks, sid, code)
+      }
+    )
+  }
+
+  const schedHooks: SchedHooks = {
+    isRunning: (id) => isHostedRunning(id),
+    start: (id) => startHostedWithHooks(id),
+    stop: (id) => {
+      stopHosted(id)
+    },
+    backup: (id) => backupHosted(id),
+    log: (id, line) => {
+      logHostedLine(id, line)
+      emit('event:host-log', { id, line })
+    },
+    listIds: () => listHostedServers().map((s) => s.id),
+    nameOf: (id) => getHosted(id)?.name
+  }
+  // 20 秒一轮：该备份的备份、该重启的重启、该轮转日志的轮转；应用起来就开始跑，空闲时几乎零开销
+  startScheduler(schedHooks)
+
+  ipcMain.handle('hosted:players', (_e, id: string) => parseOnlinePlayers(id))
+  ipcMain.handle('hosted:metrics', (_e, id: string) => {
+    const server = getHosted(id)
+    const stats = hostedStats(id)
+    const mem = hostedMemory(id)
+    return {
+      running: isHostedRunning(id),
+      uptime: hostedUptime(id),
+      players: stats.players,
+      tps: stats.tps,
+      ready: stats.done,
+      usedMb: mem.usedMb,
+      maxMb: mem.maxMb,
+      memoryMb: server?.memoryMb,
+      port: server?.port,
+      mcVersion: server?.mcVersion,
+      mods: countServerMods(id)
+    }
+  })
+  ipcMain.handle(
+    'hosted:player-action',
+    (_e, id: string, name: string, action: 'kick' | 'ban' | 'op' | 'deop') =>
+      hostedPlayerAction(id, name, action)
+  )
+  ipcMain.handle('hosted:ban-list', (_e, id: string) => readBanList(id))
+  ipcMain.handle('hosted:ban-add', (_e, id: string, name: string, reason?: string) => addBan(id, name, reason))
+  ipcMain.handle('hosted:ban-remove', (_e, id: string, name: string) => removeBan(id, name))
+
+  ipcMain.handle('hosted:sched-get', (_e, id: string) => readSched(id))
+  ipcMain.handle('hosted:sched-set', (_e, id: string, patch: Parameters<typeof writeSched>[1]) =>
+    writeSched(id, patch)
+  )
+  ipcMain.handle('hosted:backup-now', (_e, id: string) => {
+    const file = backupHosted(id)
+    const sched = readSched(id)
+    pruneBackups(getHosted(id)?.name ?? id, sched.backup.keep)
+    writeSched(id, { lastBackupAt: Date.now() })
+    return file
+  })
+  ipcMain.handle('hosted:logrotate-now', (_e, id: string) => {
+    const sched = readSched(id)
+    const res = rotateLogs(id, sched.logrotate.maxMb, sched.logrotate.keep)
+    writeSched(id, { lastRotateAt: Date.now() })
+    return res
+  })
+
+  ipcMain.handle('hosted:addon-search', async (_e, opts: Parameters<typeof searchAddons>[0]) =>
+    await searchAddons(opts)
+  )
+  ipcMain.handle(
+    'hosted:addon-versions',
+    async (_e, hit: Parameters<typeof listAddonVersions>[0], opts: Parameters<typeof listAddonVersions>[1]) =>
+      await listAddonVersions(hit, opts)
+  )
+  ipcMain.handle('hosted:addon-list', (_e, id: string, kind: 'plugin' | 'mod') =>
+    listInstalledAddons(hostedServerDir(id), kind)
+  )
+  ipcMain.handle('hosted:addon-dir', (_e, id: string, kind: 'plugin' | 'mod') =>
+    addonDir(hostedServerDir(id), kind)
+  )
+  ipcMain.handle(
+    'hosted:addon-install',
+    async (_e, id: string, version: Parameters<typeof installAddon>[1], kind: 'plugin' | 'mod') => {
+      if (!getHosted(id)) throw new Error('服务端不存在')
+      if (isHostedRunning(id)) throw new Error('先停服再装，装完再启动（运行中替换 jar 会加载失败）')
+      const res = await installAddon(hostedServerDir(id), version, kind)
+      const line = `[WFMC] 已安装 ${res.fileName}（${(res.bytes / 1024 / 1024).toFixed(1)}MB）`
+      logHostedLine(id, line)
+      emit('event:host-log', { id, line })
+      return res
+    }
+  )
+  ipcMain.handle(
+    'hosted:addon-remove',
+    (_e, id: string, fileName: string, kind: 'plugin' | 'mod') => {
+      if (isHostedRunning(id)) throw new Error('先停服再卸载')
+      const dest = removeAddon(hostedServerDir(id), fileName, kind)
+      const line = `[WFMC] 已卸载 ${fileName}（移到 .trash，需要还能捞回来）`
+      logHostedLine(id, line)
+      emit('event:host-log', { id, line })
+      return dest
+    }
+  )
 
   // ---------- 进服前环境检查 / 自动补齐 ----------
   // 只探「这个地址背后的东西是什么环境」，不改本地文件
@@ -1303,11 +1466,75 @@ ipcMain.handle('data:size', () => store.dataSize())
   ipcMain.handle('room:encode', (_e, host: string, port: number, env?: { mcVersion?: string; loader?: string; loaderVersion?: string }) => encodeRoomCode(host, port, env))
   ipcMain.handle('room:decode', (_e, code: string) => decodeRoomCode(code))
 
+  // ---------- 联机 2.0：房间环境清单（B 方向） ----------
+  // 房主侧：把本实例的 mod 清单压成一段短码
+  ipcMain.handle('room:manifest', (_e, instanceId: string) => {
+    const payload = manifestOfInstance(instanceId)
+    return { payload, code: encodeManifest(payload) }
+  })
+  // 好友侧：粘码解析（解不开就抛，渲染层直接显示错误文案）
+  ipcMain.handle('room:manifest-parse', (_e, code: string) => decodeManifest(code))
+  // 比对：本地实例 vs 房间清单（纯计算，不下东西）
+  ipcMain.handle('room:manifest-diff', (_e, instanceId: string, payload: RoomManifestPayload) => {
+    const instance = store.getInstance(instanceId)
+    return diffManifest(localModsOf(instanceId), payload, {
+      mcVersion: instance?.mcVersion,
+      loader: instance?.loader,
+      loaderVersion: instance?.loaderVersion
+    })
+  })
+  // 补齐：只下 missing / mismatch，走房主清单服务的 /mods/
+  ipcMain.handle(
+    'room:manifest-fix',
+    async (e, instanceId: string, payload: RoomManifestPayload, base: string) => {
+      const instance = store.getInstance(instanceId)
+      const diff = diffManifest(localModsOf(instanceId), payload, {
+        mcVersion: instance?.mcVersion,
+        loader: instance?.loader,
+        loaderVersion: instance?.loaderVersion
+      })
+      const sender = e.sender
+      return applyManifestDiff(instanceId, payload, base, diff, (done, total) => {
+        if (!sender.isDestroyed()) sender.send('event:room-manifest-progress', { instanceId, done, total })
+      })
+    }
+  )
+
   // ---------- 截图 ----------
   ipcMain.handle('shots:list', (_e, instanceId: string) => listScreenshots(instanceId))
   ipcMain.handle('shots:delete', (_e, instanceId: string, target: string) => deleteScreenshot(instanceId, target))
   ipcMain.handle('shots:open-dir', async (_e, instanceId: string) => {
     await shell.openPath(screenshotsDir(instanceId))
+  })
+
+  // ---------- 分享卡 ----------
+  // 卡片本身在渲染层用 canvas 画，主进程只做「读图 / 落盘 / 进剪贴板」三件事，
+  // 因为渲染层用 file:// 载图再画进 canvas 会把 canvas 污染掉，toDataURL 会直接抛。
+  const shotDataUrl = (file: string): string => {
+    const buf = fs.readFileSync(file)
+    const ext = path.extname(file).toLowerCase()
+    const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : 'image/png'
+    return `data:${mime};base64,${buf.toString('base64')}`
+  }
+  const stripPngPrefix = (b64: string): string => String(b64).replace(/^data:image\/\w+;base64,/, '')
+
+  ipcMain.handle('share:read-image', (_e, file: string) => shotDataUrl(file))
+  ipcMain.handle('share:latest-shot', (_e, instanceId: string) => {
+    const first = listScreenshots(instanceId)[0]
+    return first ? { name: first.name, path: first.path, dataUrl: shotDataUrl(first.path) } : null
+  })
+  ipcMain.handle('share:save-png', (_e, instanceId: string, base64: string) => {
+    const dir = screenshotsDir(instanceId)
+    fs.mkdirSync(dir, { recursive: true })
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+    const file = path.join(dir, `share-${stamp}.png`)
+    fs.writeFileSync(file, Buffer.from(stripPngPrefix(base64), 'base64'))
+    return file
+  })
+  ipcMain.handle('share:copy-image', (_e, base64: string) => {
+    const img = nativeImage.createFromBuffer(Buffer.from(stripPngPrefix(base64), 'base64'))
+    if (img.isEmpty()) throw new Error('图片画出来是空的，没法复制')
+    clipboard.writeImage(img)
   })
 
   // ---------- 性能预设 ----------

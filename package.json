@@ -1,7 +1,7 @@
 {
   "name": "wfmc",
   "productName": "WFMC",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "WFMC - WanFan Minecraft Launcher 游戏 / 整合包 / 模组 / 光影 下载与启动",
   "main": "dist/main/index.js",
   "author": "WanFan Technology",
@@ -18,7 +18,9 @@
     "dist:portable": "npm run build && electron-builder --win portable --x64",
     "dist:setup": "npm run build && electron-builder --win nsis --x64",
     "delta": "node scripts/make-delta.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "i18n": "node scripts/i18n-scan.mjs",
+    "i18n:check": "node scripts/i18n-scan.mjs --min 98"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -63,7 +65,14 @@
       "target": [
         "portable",
         "nsis"
-      ]
+      ],
+      "signtoolOptions": {
+        "publisherName": "WanFan Technology",
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "rfc3161TimeStampServer": "http://timestamp.digicert.com"
+      }
     },
     "portable": {
       "artifactName": "WFMC-Portable-${version}.exe"

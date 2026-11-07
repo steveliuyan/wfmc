@@ -1,7 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { SaveBackup } from '../shared/types'
+import type { SaveBackup, SavesBackupResult } from '../shared/types'
 import { readZipEntry, readZipFromFile, zipDirectory } from './zip'
+
+export type { SavesBackupResult }
 
 /**
  * 存档快照（备份 / 回滚）的纯文件逻辑。
@@ -14,18 +16,50 @@ export function backupFileName(instanceId: string, date = new Date()): string {
   return `${instanceId}-saves-${stamp}.zip`
 }
 
-/** 把 saves 目录整包打成快照，返回文件路径；没有文件时返回 undefined */
+/** 快照旁边的小说明（.zip.json）：记下装了什么，列表不解压就能显示 */
+interface BackupMeta {
+  worlds: string[]
+  files: number
+  instanceId: string
+  instanceName?: string
+  mcVersion?: string
+  createdAt: number
+}
+
+function metaFile(zipFile: string): string {
+  return `${zipFile}.json`
+}
+
+/** saves 目录下一级的存档目录（新世界、新的世界1 …） */
+export function listWorldDirs(savesDir: string): string[] {
+  try {
+    return fs
+      .readdirSync(savesDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 把 saves 目录整包打成快照。返回文件路径 + 装了哪些存档；没有文件时返回 undefined。
+ * 顺手写一份 .zip.json，列表页不用解压就知道这份里有哪些世界。
+ */
 export function createBackup(
   savesDir: string,
   backupDir: string,
   instanceId: string,
-  date = new Date()
-): string | undefined {
+  date = new Date(),
+  extra: { instanceName?: string; mcVersion?: string } = {}
+): SavesBackupResult | undefined {
   if (!fs.existsSync(savesDir)) return undefined
+  const worlds = listWorldDirs(savesDir)
   fs.mkdirSync(backupDir, { recursive: true })
   const out = path.join(backupDir, backupFileName(instanceId, date))
-  const count = zipDirectory(savesDir, out)
-  if (count === 0) {
+  const files = zipDirectory(savesDir, out)
+  if (files === 0) {
     try {
       fs.rmSync(out, { force: true })
     } catch {
@@ -33,7 +67,30 @@ export function createBackup(
     }
     return undefined
   }
-  return out
+  const bytes = fs.statSync(out).size
+  const meta: BackupMeta = {
+    worlds,
+    files,
+    instanceId,
+    instanceName: extra.instanceName,
+    mcVersion: extra.mcVersion,
+    createdAt: date.getTime()
+  }
+  try {
+    fs.writeFileSync(metaFile(out), JSON.stringify(meta, null, 2), 'utf-8')
+  } catch {
+    /* 说明文件写不进去也不影响快照本身 */
+  }
+  return { file: out, worlds, files, bytes, instanceId, instanceName: extra.instanceName, mcVersion: extra.mcVersion }
+}
+
+/** 读快照旁边的说明（老快照没有就返回 undefined） */
+export function readBackupMeta(zipFile: string): BackupMeta | undefined {
+  try {
+    return JSON.parse(fs.readFileSync(metaFile(zipFile), 'utf-8')) as BackupMeta
+  } catch {
+    return undefined
+  }
 }
 
 /** 列出某实例的快照（新的在前） */
@@ -47,7 +104,17 @@ export function listBackups(backupDir: string, instanceId: string): SaveBackup[]
       .map((n) => {
         const full = path.join(backupDir, n)
         const stat = fs.statSync(full)
-        return { file: full, name: n, bytes: stat.size, time: stat.mtimeMs }
+        const meta = readBackupMeta(full)
+        return {
+          file: full,
+          name: n,
+          bytes: stat.size,
+          time: stat.mtimeMs,
+          worlds: meta?.worlds,
+          files: meta?.files,
+          instanceName: meta?.instanceName,
+          mcVersion: meta?.mcVersion
+        }
       })
       .sort((a, b) => b.time - a.time)
   } catch {
@@ -61,6 +128,7 @@ export function pruneBackups(backupDir: string, instanceId: string, keep = 12): 
   for (const item of listBackups(backupDir, instanceId).slice(keep)) {
     try {
       fs.rmSync(item.file, { force: true })
+      fs.rmSync(metaFile(item.file), { force: true })
       removed++
     } catch {
       /* 删不掉就留着 */

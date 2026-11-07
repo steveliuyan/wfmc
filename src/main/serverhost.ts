@@ -257,6 +257,13 @@ export function hostedLogsOf(id: string): string[] {
   return hostedLogs.get(id) ?? []
 }
 
+/** 往某个服务端的日志缓冲里补一行（计划任务 / 看门狗会用到，UI 才能在日志面板看到） */
+export function logHostedLine(id: string, line: string) {
+  const arr = hostedLogs.get(id) ?? []
+  arr.push(line)
+  hostedLogs.set(id, arr.slice(-2000))
+}
+
 export function hostedUptime(id: string): number {
   const entry = runningHosted.get(id)
   return entry ? Date.now() - entry.startedAt : 0
@@ -629,7 +636,7 @@ export function readAccessList(id: string, type: 'whitelist' | 'ops'): AccessEnt
   }
 }
 
-function writeAccessList(id: string, type: 'whitelist' | 'ops', list: AccessEntry[]) {
+export function writeAccessList(id: string, type: 'whitelist' | 'ops', list: AccessEntry[]) {
   fs.writeFileSync(accessFile(id, type), JSON.stringify(list, null, 4), 'utf-8')
 }
 
@@ -699,6 +706,105 @@ export function hostedStats(id: string): { players: string[]; tps?: number; done
     if (tpsMatch) tps = Number(tpsMatch[1])
   }
   return { players: [...players], tps, done }
+}
+
+/* ------------------------------------------------------------------ *
+ * 封禁名单 / 玩家行内操作 / 内存占用
+ * ------------------------------------------------------------------ */
+
+export interface BanEntry {
+  uuid: string
+  name: string
+  created: string
+  source: string
+  expires: string
+  reason: string
+}
+
+function banFile(id: string) {
+  return path.join(serverDir(id), 'banned-players.json')
+}
+
+export function readBanList(id: string): BanEntry[] {
+  const file = banFile(id)
+  if (!fs.existsSync(file)) return []
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf-8')) as BanEntry[]
+  } catch {
+    return []
+  }
+}
+
+function writeBanList(id: string, list: BanEntry[]) {
+  fs.writeFileSync(banFile(id), JSON.stringify(list, null, 4), 'utf-8')
+}
+
+/** 封禁：写 banned-players.json，在线的顺手踢一下 */
+export function addBan(id: string, name: string, reason = '被服主封禁'): BanEntry[] {
+  const clean = name.trim()
+  if (!clean) throw new Error('名字为空')
+  const list = readBanList(id)
+  if (list.some((e) => e.name.toLowerCase() === clean.toLowerCase())) return list
+  list.push({
+    uuid: '',
+    name: clean,
+    created: new Date().toISOString(),
+    source: 'WFMC',
+    expires: 'forever',
+    reason
+  })
+  writeBanList(id, list)
+  sendHostedCommand(id, `kick ${clean} ${reason}`)
+  return list
+}
+
+export function removeBan(id: string, name: string): BanEntry[] {
+  const list = readBanList(id).filter((e) => e.name.toLowerCase() !== name.trim().toLowerCase())
+  writeBanList(id, list)
+  return list
+}
+
+/** 在线玩家：解析日志里的 joined/left，比定时发 list 再解析回复更省事 */
+export function parseOnlinePlayers(id: string): string[] {
+  return hostedStats(id).players
+}
+
+/** 玩家行内操作（踢 / 封 / 给管理员 / 撤管理员） */
+export function hostedPlayerAction(
+  id: string,
+  name: string,
+  action: 'kick' | 'ban' | 'op' | 'deop'
+): string {
+  const clean = name.trim()
+  if (!clean) throw new Error('名字为空')
+  if (action === 'ban') {
+    addBan(id, clean)
+    return `已封禁 ${clean}`
+  }
+  if (action === 'op') {
+    addAccessEntry(id, 'ops', clean)
+    sendHostedCommand(id, `op ${clean}`)
+    return `已设为管理员：${clean}`
+  }
+  if (action === 'deop') {
+    removeAccessEntry(id, 'ops', clean)
+    sendHostedCommand(id, `deop ${clean}`)
+    return `已取消管理员：${clean}`
+  }
+  sendHostedCommand(id, `kick ${clean}`)
+  return `已踢出 ${clean}`
+}
+
+/** 从最近日志里读内存占用（Paper / Fabric 都会周期性打 Memory: 已用/上限 MB） */
+export function hostedMemory(id: string): { usedMb?: number; maxMb?: number } {
+  const logs = hostedLogs.get(id) ?? []
+  for (let i = logs.length - 1; i >= 0 && i >= logs.length - 300; i--) {
+    const m =
+      /Memory:\s*([\d.]+)\/([\d.]+)\s*MB/.exec(logs[i]) ??
+      /(?:Used memory|Heap):\s*(\d+)\s*MB.*?(?:max(?:imum)?|of)[^\d]*(\d+)\s*MB/i.exec(logs[i])
+    if (m) return { usedMb: Math.round(Number(m[1])), maxMb: Math.round(Number(m[2])) }
+  }
+  return {}
 }
 
 /* ------------------------------------------------------------------ *

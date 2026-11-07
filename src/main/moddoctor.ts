@@ -22,7 +22,7 @@ export interface ModIssue {
   enableFiles?: string[]
 }
 
-interface ModMeta {
+export interface ModMeta {
   file: string
   path: string
   id?: string
@@ -30,6 +30,8 @@ interface ModMeta {
   version?: string
   loader?: 'fabric' | 'forge' | 'neoforge' | 'quilt' | 'unknown'
   depends?: string[]
+  /** 声明「和谁不兼容」（fabric.mod.json 的 breaks / mods.toml 的 incompatible） */
+  breaks?: string[]
   /** 依赖 id → 版本要求（Fabric 的 >=1.0.0、Forge 的 [1.0,) 都在这里） */
   depRanges?: Record<string, string>
   /** fabric.mod.json 的 provides：这个 jar 额外「顶替」了哪些 modId（如 cloth-config 提供 cloth-config2） */
@@ -54,7 +56,7 @@ interface ModProvider {
 }
 
 /** 不算「要装的前置」的那些 id：游戏本体、Java、加载器自己 */
-const NOT_A_MOD = new Set([
+export const NOT_A_MOD = new Set([
   'minecraft',
   'java',
   'fabricloader',
@@ -266,6 +268,7 @@ function parseModJarRaw(file: string): ModMeta {
         name?: string
         version?: string
         depends?: Record<string, string | string[]>
+        breaks?: Record<string, string | string[]>
         provides?: unknown
         jars?: unknown
       }
@@ -284,6 +287,10 @@ function parseModJarRaw(file: string): ModMeta {
       }
       meta.depRanges = ranges
       meta.depends = Object.keys(ranges)
+      // breaks：明确声明不兼容的 modId（依赖图里画红色虚线）
+      meta.breaks = Object.keys(json.breaks ?? {})
+        .map((k) => k.toLowerCase())
+        .filter((k) => !NOT_A_MOD.has(k) && k !== (meta.id ?? '').toLowerCase())
       return meta
     } catch {
       /* 继续看 forge */
@@ -375,7 +382,7 @@ const DEP_LABEL: Record<string, string> = {
   'forge-config-api-port': 'Forge Config API Port'
 }
 
-function depLabel(id: string): string {
+export function depLabel(id: string): string {
   return DEP_LABEL[id.toLowerCase()] ?? id
 }
 

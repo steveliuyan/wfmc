@@ -22,6 +22,8 @@ import Manage from './views/Manage'
 import SettingsView from './views/Settings'
 import Notify from './views/Notify'
 import NoticePopup from './views/NoticePopup'
+import WhatsNew from './components/WhatsNew'
+import { pendingWhatsNew } from './whatsnew'
 import Tour from './components/Tour'
 import { tourSteps } from './tour-steps'
 import logoHorizontal from './assets/lottie-horizontal.json'
@@ -432,6 +434,8 @@ function Shell() {
   const [notifyLoggedIn, setNotifyLoggedIn] = useState(false)
   /** 待弹的「弹窗」类通知（mode='popup'），一次显示队首那条 */
   const [popupQueue, setPopupQueue] = useState<NotifyItem[]>([])
+  // 升级公告：只在版本变了之后第一次打开时弹（内容写死在 whatsnew.ts，不走服务端）
+  const [whatsNew, setWhatsNew] = useState(() => pendingWhatsNew())
   /** 本次运行里已经弹过的 id：同一条不会每分钟重复弹（重启后仍未读会再弹一次，符合「打开应用就弹」） */
   const poppedRef = useRef<Set<string>>(new Set())
   const [noticeSeen, setNoticeSeen] = useState<string[]>(() => {
@@ -962,6 +966,8 @@ function Shell() {
       {settings && settings.disclaimerAccepted && !settings.onboarded && <Onboarding />}
 
       <TaskPanel />
+
+      {whatsNew && <WhatsNew entry={whatsNew} onClose={() => setWhatsNew(undefined)} />}
 
       {popupQueue.length > 0 && (
         <NoticePopup

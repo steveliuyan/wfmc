@@ -12,6 +12,46 @@ import { startCloudScheduler, stopCloudScheduler } from './cloudsync'
 const devUrl = process.env.VITE_DEV_SERVER_URL
 
 /**
+ * wfmc:// 自定义协议。
+ * 用浏览器登录时会先打开网页，登完再跳回 wfmc://login?...；
+ * 注册了这个协议，系统才会把那一跳交给启动器，而不是弹「找不到应用」。
+ * 真正的登录态是主进程轮询拿的，回跳只是顺手把窗口叫到前台 + 刷新一次状态，
+ * 所以便携版写不进注册表也不影响能不能登录成功。
+ */
+const PROTOCOL = 'wfmc'
+
+function registerProtocol() {
+  try {
+    if (process.defaultApp && process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, [path.resolve(process.argv[1])])
+    } else {
+      app.setAsDefaultProtocolClient(PROTOCOL)
+    }
+  } catch {
+    /* 注册不上就算了，登录本身不依赖回跳 */
+  }
+}
+
+function focusMainWindow() {
+  const win = BrowserWindow.getAllWindows()[0]
+  if (!win || win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+}
+
+function handleProtocolUrl(raw?: string) {
+  if (!raw || !raw.toLowerCase().startsWith(`${PROTOCOL}:`)) return
+  focusMainWindow()
+  const win = BrowserWindow.getAllWindows()[0]
+  if (win && !win.isDestroyed()) win.webContents.send('event:protocol', raw)
+}
+
+function protocolUrlFromArgv(argv: string[]): string | undefined {
+  return argv.find((a) => typeof a === 'string' && a.toLowerCase().startsWith(`${PROTOCOL}:`))
+}
+
+/**
  * 关掉 HTTP/2 / QUIC。
  *
  * 原因：cdn.modrinth.com、代理出口、以及大部分镜像都是「按连接限速」的。
@@ -135,12 +175,16 @@ function createWindow() {
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    const win = BrowserWindow.getAllWindows()[0]
-    if (win) {
-      if (win.isMinimized()) win.restore()
-      win.focus()
-    }
+  registerProtocol()
+  // Windows / Linux：第二次启动时命令行里带着 wfmc://…
+  app.on('second-instance', (_e, argv) => {
+    handleProtocolUrl(protocolUrlFromArgv(argv))
+    focusMainWindow()
+  })
+  // macOS
+  app.on('open-url', (e, url) => {
+    e.preventDefault()
+    handleProtocolUrl(url)
   })
 
   installGlobalHandlers()
@@ -163,6 +207,8 @@ app.whenReady().then(async () => {
     const win = createWindow()
     setMainWindow(win)
     setupTray(win)
+    // 冷启动就是被 wfmc:// 拉起来的（浏览器回跳时启动器还没开）
+    handleProtocolUrl(protocolUrlFromArgv(process.argv))
     // 云同步（默认关；没配置的话 startCloudScheduler 内部直接返回，不发任何请求）
     startCloudScheduler()
 

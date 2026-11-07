@@ -200,6 +200,8 @@ export interface CloudStatus {
   account?: { loggedIn: boolean; email?: string; displayName?: string; userId?: string }
   /** 服务端定的保留份数（只读展示） */
   limits?: { autoKeep: number; manualKeep: number }
+  /** 本地保留份数（客户端固定值，跟服务端无关） */
+  localKeep?: number
   /** 本地已有的备份 */
   localBackups?: CloudBackup[]
   backups: CloudBackup[]
@@ -532,6 +534,21 @@ export interface WorldRestoreResult {
   check: WorldPackCheck
 }
 
+/** 打包存档的结果：不只给路径，还要告诉界面「这份里装了哪几个存档」 */
+export interface SavesBackupResult {
+  /** zip 的绝对路径 */
+  file: string
+  /** 打进去的存档目录名（saves 下一级目录） */
+  worlds: string[]
+  /** 打包的文件数 */
+  files: number
+  /** zip 体积（字节） */
+  bytes: number
+  instanceId: string
+  instanceName?: string
+  mcVersion?: string
+}
+
 /** 一份存档快照（备份目录里的 zip） */
 export interface SaveBackup {
   /** 绝对路径 */
@@ -540,6 +557,13 @@ export interface SaveBackup {
   name: string
   bytes: number
   time: number
+  /** 这份快照里装了几个存档（世界目录名）；老快照没有这项 */
+  worlds?: string[]
+  /** 打包的文件数 */
+  files?: number
+  /** 属于哪个实例 */
+  instanceName?: string
+  mcVersion?: string
 }
 
 /** 回滚结果 */
@@ -680,3 +704,223 @@ export interface NotifyListResult {
   /** 登录了 = 服务端能记住谁读过；未登录 = 只能记在这台电脑上 */
   loggedIn: boolean
 }
+
+// ============ 模组依赖图（D：内容管理 → 依赖） ============
+
+export interface ModGraphNode {
+  /** 唯一键：真实模组用文件名，缺失前置用 `missing:<modId>` */
+  key: string
+  id?: string
+  name: string
+  version?: string
+  file?: string
+  loader?: string
+  /** 文件大小（字节）；缺失前置节点为 0 */
+  bytes: number
+  disabled?: boolean
+  /** true = 没装，是「缺前置」占位点 */
+  missing?: boolean
+  /** 缺失前置要求的版本范围（展示用） */
+  range?: string
+  /** 它依赖了几个 */
+  out: number
+  /** 几个模组依赖它 */
+  in: number
+}
+
+export interface ModGraphEdge {
+  from: string
+  to: string
+  /** depends = 正常依赖；missing = 指向缺失占位点；breaks = 明确声明不兼容 */
+  kind: 'depends' | 'missing' | 'breaks'
+}
+
+export interface ModGraph {
+  nodes: ModGraphNode[]
+  edges: ModGraphEdge[]
+  cycles: { keys: string[]; label: string }[]
+  missing: { id: string; label: string; range?: string; wantedBy: string[] }[]
+  stats: { mods: number; edges: number; missingCount: number; cycleCount: number }
+}
+
+/* ---------------- 服主面板 2.0：看板 / 计划任务 / 插件市场 ---------------- */
+
+/** 一屏看完的运行时指标（都从日志和进程状态里扣出来的，没有额外后台服务） */
+export interface HostedMetrics {
+  running: boolean
+  /** 已运行毫秒 */
+  uptime: number
+  players: string[]
+  tps?: number
+  /** 世界是否已经加载完（日志里出现 Done） */
+  ready: boolean
+  /** 日志里读到的已用/上限内存（MB），解析不到就是 undefined */
+  usedMb?: number
+  maxMb?: number
+  /** 配置里给的内存上限 */
+  memoryMb?: number
+  port?: number
+  mcVersion?: string
+  mods: number
+}
+
+export interface SchedBackup {
+  enabled: boolean
+  everyMinutes: number
+  keep: number
+}
+
+export interface SchedRestart {
+  enabled: boolean
+  everyMinutes: number
+}
+
+export interface SchedLog {
+  enabled: boolean
+  maxMb: number
+  keep: number
+}
+
+export interface SchedWatchdog {
+  enabled: boolean
+}
+
+export interface ServerSched {
+  backup: SchedBackup
+  restart: SchedRestart
+  logrotate: SchedLog
+  watchdog: SchedWatchdog
+  lastBackupAt?: number
+  lastRestartAt?: number
+  lastRotateAt?: number
+}
+
+/** 插件/模组市场的一条搜索结果 */
+export interface AddonHit {
+  source: 'modrinth' | 'hangar'
+  id: string
+  title: string
+  author?: string
+  description: string
+  downloads?: number
+  iconUrl?: string
+  pageUrl?: string
+}
+
+export interface AddonVersion {
+  version: string
+  fileUrl: string
+  fileName: string
+  sizeBytes?: number
+  sha256?: string
+  sha512?: string
+  gameVersions: string[]
+  loaders: string[]
+  downloadCount?: number
+  channel?: string
+}
+
+export interface InstalledAddon {
+  fileName: string
+  bytes: number
+}
+
+/* ---------------- 联机 2.0：房间环境清单 ---------------- */
+
+export interface RoomModRef {
+  file: string
+  sha1: string
+  size: number
+}
+
+export interface RoomManifestPayload {
+  v: 1
+  name: string
+  mcVersion: string
+  loader: string
+  loaderVersion?: string
+  gamePort: number
+  at: number
+  mods: RoomModRef[]
+}
+
+export interface RoomManifestDiff {
+  /** 有值就是直接拒绝，不要尝试补齐 */
+  refuse?: string
+  missing: RoomModRef[]
+  mismatch: { want: RoomModRef; have: RoomModRef }[]
+  /** 多出来的（只提示，不动它 —— 只增不删） */
+  extra: RoomModRef[]
+  manual: { title: string; reason: string }[]
+  downloadBytes: number
+  needsConfirm: boolean
+  env: { mcVersion: string; loader: string; loaderVersion?: string }
+}
+
+export interface RoomFixResult {
+  downloaded: number
+  bytes: number
+  skipped: number
+  errors: { file: string; message: string }[]
+}
+
+/* ---------------- 存档工坊（E 方向） ---------------- */
+
+export interface SaveWorld {
+  folder: string
+  /** level.dat 里的世界名（读不到就退回文件夹名） */
+  name: string
+  bytes: number
+  files: number
+  mtime: number
+  hasLevel: boolean
+}
+
+export interface SaveLevelInfo {
+  levelName?: string
+  gameType?: number
+  difficulty?: number
+  hardcore?: boolean
+  allowCommands?: boolean
+  dayTime?: string
+  time?: string
+  versionName?: string
+  dataVersion?: number
+  spawn?: { x: number; y: number; z: number }
+  lastPlayed?: string
+}
+
+export interface SaveRegion {
+  name: string
+  bytes: number
+  mtime: number
+  chunks: number
+}
+
+export interface SaveInspect {
+  world: SaveWorld
+  level?: SaveLevelInfo
+  regions: SaveRegion[]
+  raw?: { bytes: number; compression: string; sha1: string }
+  /** 白名单字段里实际存在哪些（不存在的不给改） */
+  editable: string[]
+}
+
+export interface LevelPatch {
+  levelName?: string
+  gameType?: number
+  difficulty?: number
+  hardcore?: boolean
+  allowCommands?: boolean
+  dayTime?: number
+  time?: number
+}
+
+export interface PatchResult {
+  changed: string[]
+  skipped: { field: string; reason: string }[]
+  backup: string
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+}
+

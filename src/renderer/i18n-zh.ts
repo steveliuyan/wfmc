@@ -3,7 +3,12 @@
  *
  * 用数组而不是对象：允许同义重复项，后面覆盖前面。
  * 匹配规则：整段文本 trim 后精确匹配（不做部分替换，避免把句子切碎）。
+ *
+ * 这里放通用的、跨页面都在用的词；各页面自己的补翻放在 ./i18n-parts/ 下，
+ * 拆文件是为了能分头补、互不冲突。
  */
+import { PARTS } from './i18n-parts'
+
 const PAIRS: [string, string][] = [
   // ===== 通用短词 =====
   ['确定', 'OK'],
@@ -516,7 +521,10 @@ const PAIRS: [string, string][] = [
   ['已看', 'Seen']
 ]
 
-export const ZH_TO_EN: Map<string, string> = new Map(PAIRS)
+/** 分区域补翻的词条（scripts/i18n-scan.mjs 扫出来的漏翻文案） */
+const ALL_PAIRS: [string, string][] = [...PAIRS, ...PARTS]
+
+export const ZH_TO_EN: Map<string, string> = new Map(ALL_PAIRS)
 
 /** 最长优先匹配用（句子里包含短词时先试长的） */
 export const ZH_KEYS: string[] = [...ZH_TO_EN.keys()].sort((a, b) => b.length - a.length)

@@ -4433,3 +4433,7 @@ textarea:focus {
   font-size: 11.5px;
   color: var(--muted);
 }
+/* 升级公告（WhatsNew）：条目多、句子长，行距给足，别挤成一段 */
+.whats-new { max-width: 560px }
+.whats-new-list { margin: 14px 0 4px; padding-left: 20px; display: flex; flex-direction: column; gap: 8px }
+.whats-new-list li { line-height: 1.55 }

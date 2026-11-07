@@ -3,6 +3,7 @@ import { api, type HostedServer, type LanWorld, type RoomEnv, type ScannedPort, 
 import type { Instance } from '../../shared/types'
 import { useLauncher, useT } from '../store'
 import { joinWithSync } from '../joinWithSync'
+import RoomManifestCard from '../components/RoomManifestCard'
 import type { PageId } from '../App'
 
 const LOADER_NAMES: Record<string, string> = {
@@ -876,6 +877,13 @@ export default function Online({ goto }: { goto: (p: PageId) => void }) {
           </div>
         </div>
       </div>
+
+      <RoomManifestCard
+        instanceId={currentId}
+        instanceName={current?.name}
+        defaultHost={shareHost.trim() || upnp?.externalIp || tunnel.publicAddress?.split(':')[0] || lanIp}
+        defaultPort={port}
+      />
 
       <div className="card">
         <h3>怎么选</h3>

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { api, friendlyError, type AccessEntry, type HostedServer } from '../api'
 import Select from '../components/Select'
+import HostedBoard from '../components/HostedBoard'
 import type { PageId } from '../App'
 import { useLauncher, useT } from '../store'
 
@@ -33,13 +34,13 @@ export default function Hosting({ goto }: { goto: (p: PageId) => void }) {
   const [modPanel, setModPanel] = useState<string>()
   const [modImportFrom, setModImportFrom] = useState<string>()
   // 每个服务端只允许展开一个面板；按钮高亮 + ▾/▴ 表示当前是否展开
-  const [panel, setPanel] = useState<Record<string, 'console' | 'props' | 'ops' | undefined>>({})
+  const [panel, setPanel] = useState<Record<string, 'console' | 'props' | 'ops' | 'board' | undefined>>({})
   const [stopping, setStopping] = useState<Record<string, boolean>>({})
   const [propsJson, setPropsJson] = useState<Record<string, string>>({})
   const [propsText, setPropsText] = useState('')
   const [showRaw, setShowRaw] = useState<Record<string, boolean>>({})
 
-  const togglePanel = (id: string, kind: 'console' | 'props' | 'ops' | undefined) =>
+  const togglePanel = (id: string, kind: 'console' | 'props' | 'ops' | 'board' | undefined) =>
     setPanel((prev) => ({ ...prev, [id]: prev[id] === kind ? undefined : kind }))
   const [logs, setLogs] = useState<Record<string, string[]>>({})
   const [running, setRunning] = useState<Record<string, boolean>>({})
@@ -380,6 +381,12 @@ export default function Hosting({ goto }: { goto: (p: PageId) => void }) {
                 玩家管理 {panel[s.id] === 'ops' ? '▴' : '▾'}
               </button>
               <button
+                className={`btn sm ${panel[s.id] === 'board' ? 'on' : ''}`}
+                onClick={() => togglePanel(s.id, 'board')}
+              >
+                看板 {panel[s.id] === 'board' ? '▴' : '▾'}
+              </button>
+              <button
                 className="btn sm"
                 onClick={async () => {
                   try {
@@ -419,6 +426,8 @@ export default function Hosting({ goto }: { goto: (p: PageId) => void }) {
                 删除
               </button>
             </div>
+
+            {panel[s.id] === 'board' && <HostedBoard server={s} running={!!running[s.id]} />}
 
             {panel[s.id] === 'console' && (
               <div className="panel" style={{ marginTop: 12 }}>

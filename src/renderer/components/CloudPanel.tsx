@@ -46,6 +46,9 @@ export default function CloudPanel() {
     }
   }, [])
 
+  // 浏览器里登录完成会回跳 wfmc://…，主进程把窗口叫到前台再发这个事件，这里顺手刷一次状态
+  useEffect(() => api.onProtocol(() => void refresh()), [refresh])
+
   useEffect(() => {
     void (async () => {
       const c = await api.cloudSettings()
@@ -113,6 +116,8 @@ export default function CloudPanel() {
 
   const manualKeep = status?.limits?.manualKeep ?? 5
   const autoKeep = status?.limits?.autoKeep ?? 3
+  // 本地留几份以主进程实际配置为准（服务器下发的 manualKeep 只管云端）
+  const localKeep = status?.localKeep ?? manualKeep
 
   return (
     <>
@@ -258,7 +263,7 @@ export default function CloudPanel() {
         </div>
         <p className="set-note">
           {status?.error ? `上次出错：${status.error}` : `当前放在：${status?.storageTarget ?? '—'}`}
-          {`（本地保留最近 ${manualKeep} 份，更早的自动删）`}
+          {`（本地保留最近 ${localKeep} 份，更早的自动删）`}
         </p>
       </div>
 
@@ -295,7 +300,7 @@ export default function CloudPanel() {
             {busy === 'test' ? '测试中…' : '测试连接'}
           </button>
         </div>
-        <p className="set-note">登录、退出登录、改密码都在上面「账号」那一栏里，这里只显示状态。</p>
+        <p className="set-note">登录、退出登录、改密码都在这个分区最上面的「账号」块里，这里只显示状态。</p>
       </div>
 
       <div className="set-block">

@@ -1,6 +1,7 @@
 import type {
   RestoreBackupResult,
   SaveBackup,
+  SavesBackupResult,
   Account,
   ContentItem,
   ContentKind,
@@ -33,8 +34,13 @@ import type {
   WorldRestoreResult,
   WfmcAccountStatus
 } from '../shared/types'
-import type { CleanResult, DiskUsage, SearchHit } from '../shared/types'
-export type { SearchHit }
+import type { CleanResult, DiskUsage, ModGraph, ModGraphEdge, ModGraphNode, SearchHit } from '../shared/types'
+import type { AddonHit, AddonVersion, HostedMetrics, InstalledAddon, RoomFixResult, RoomManifestDiff, RoomManifestPayload, ServerSched } from '../shared/types'
+import type { LevelPatch, PatchResult, SaveInspect, SaveWorld } from '../shared/types'
+export type { SearchHit, ModGraph, ModGraphEdge, ModGraphNode }
+export type { AddonHit, AddonVersion, HostedMetrics, InstalledAddon, ServerSched }
+export type { RoomFixResult, RoomManifestDiff, RoomManifestPayload }
+export type { LevelPatch, PatchResult, SaveInspect, SaveWorld }
 
 const bridge = (
   window as unknown as {
@@ -364,7 +370,11 @@ export const api = {
   importContent: (instanceId: string, kind: ContentKind) =>
     call<ContentItem[] | undefined>('content:import', instanceId, kind),
   openContentDir: (instanceId: string, kind: ContentKind) => call<void>('content:open', instanceId, kind),
-  backupSaves: (instanceId: string) => call<string | undefined>('saves:backup', instanceId),
+  backupSaves: (instanceId: string) => call<SavesBackupResult | undefined>('saves:backup', instanceId),
+  /** 在资源管理器里选中某个快照 zip（找不到就打开备份文件夹） */
+  revealBackup: (file: string) => call<void>('saves:reveal-backup', file),
+  /** 直接打开存档快照存放的文件夹 */
+  openBackupsDir: () => call<void>('saves:open-backups-dir'),
   saveBackups: (instanceId: string) => call<SaveBackup[]>('saves:backups', instanceId),
   restoreSaveBackup: (instanceId: string, file: string) =>
     call<RestoreBackupResult>('saves:restore-backup', instanceId, file),
@@ -425,11 +435,28 @@ export const api = {
 
   encodeRoom: (host: string, port: number, env?: RoomEnv) => call<string>('room:encode', host, port, env),
   decodeRoom: (code: string) => call<{ host: string; port: number; env?: RoomEnv }>('room:decode', code),
+  // 联机 2.0：房间环境清单
+  roomManifest: (instanceId: string) => call<{ payload: RoomManifestPayload; code: string }>('room:manifest', instanceId),
+  roomManifestParse: (code: string) => call<RoomManifestPayload>('room:manifest-parse', code),
+  roomManifestDiff: (instanceId: string, payload: RoomManifestPayload) =>
+    call<RoomManifestDiff>('room:manifest-diff', instanceId, payload),
+  roomManifestFix: (instanceId: string, payload: RoomManifestPayload, base: string) =>
+    call<RoomFixResult>('room:manifest-fix', instanceId, payload, base),
 
   screenshots: (instanceId: string) =>
     call<{ name: string; path: string; size: number; time: number }[]>('shots:list', instanceId),
   deleteScreenshot: (instanceId: string, target: string) => call<void>('shots:delete', instanceId, target),
   openScreenshotsDir: (instanceId: string) => call<void>('shots:open-dir', instanceId),
+
+  /** 分享卡：该实例最新一张截图（带 data URL，方便直接画进 canvas） */
+  shareLatestShot: (instanceId: string) =>
+    call<{ name: string; path: string; dataUrl: string } | null>('share:latest-shot', instanceId),
+  /** 分享卡：按路径读图（卡片里选了某一张时用） */
+  shareReadImage: (file: string) => call<string>('share:read-image', file),
+  /** 分享卡：PNG 落盘到该实例的截图目录，返回路径 */
+  shareSavePng: (instanceId: string, base64: string) => call<string>('share:save-png', instanceId, base64),
+  /** 分享卡：直接进剪贴板，方便粘到聊天窗 */
+  shareCopyImage: (base64: string) => call<void>('share:copy-image', base64),
 
   perfPresets: () =>
     call<{ id: string; name: string; desc: string; memoryMb: number; jvmArgs: string[] }[]>('preset:list'),
@@ -497,6 +524,43 @@ export const api = {
   hostedModsCount: (id: string) => call<number>('hosted:mods-count', id),
   hostedManifest: (id: string) =>
     call<{ port?: number; mods?: number; manifest?: ServerManifest }>('hosted:manifest', id),
+
+  // ---- 服主面板 2.0：看板 / 玩家 / 计划任务 / 插件与模组市场 ----
+  hostedMetrics: (id: string) => call<HostedMetrics>('hosted:metrics', id),
+  hostedPlayers: (id: string) => call<string[]>('hosted:players', id),
+  hostedPlayerAction: (id: string, name: string, action: 'kick' | 'ban' | 'op' | 'deop') =>
+    call<string>('hosted:player-action', id, name, action),
+  hostedBanList: (id: string) =>
+    call<{ uuid: string; name: string; created: string; source: string; expires: string; reason: string }[]>(
+      'hosted:ban-list',
+      id
+    ),
+  hostedBanAdd: (id: string, name: string, reason?: string) =>
+    call<unknown[]>('hosted:ban-add', id, name, reason),
+  hostedBanRemove: (id: string, name: string) => call<unknown[]>('hosted:ban-remove', id, name),
+  hostedSched: (id: string) => call<ServerSched>('hosted:sched-get', id),
+  saveHostedSched: (id: string, patch: Partial<ServerSched>) =>
+    call<ServerSched>('hosted:sched-set', id, patch),
+  backupHostedNow: (id: string) => call<string>('hosted:backup-now', id),
+  logrotateNow: (id: string) => call<{ rotated?: string; sizeMb: number }>('hosted:logrotate-now', id),
+  addonSearch: (opts: {
+    query: string
+    kind: 'plugin' | 'mod'
+    mcVersion?: string
+    loader?: string
+    source?: 'modrinth' | 'hangar'
+    limit?: number
+  }) => call<AddonHit[]>('hosted:addon-search', opts),
+  addonVersions: (
+    hit: { source: 'modrinth' | 'hangar'; id: string },
+    opts: { kind: 'plugin' | 'mod'; mcVersion?: string; loader?: string }
+  ) => call<AddonVersion[]>('hosted:addon-versions', hit, opts),
+  addonList: (id: string, kind: 'plugin' | 'mod') => call<InstalledAddon[]>('hosted:addon-list', id, kind),
+  addonInstall: (id: string, version: AddonVersion, kind: 'plugin' | 'mod') =>
+    call<{ filePath: string; fileName: string; bytes: number }>('hosted:addon-install', id, version, kind),
+  addonRemove: (id: string, fileName: string, kind: 'plugin' | 'mod') =>
+    call<string>('hosted:addon-remove', id, fileName, kind),
+  addonDir: (id: string, kind: 'plugin' | 'mod') => call<string>('hosted:addon-dir', id, kind),
   serverSyncProbe: (host: string, gamePort: number) =>
     call<{ found: boolean; base?: string; manifest?: ServerManifest }>('serversync:probe', host, gamePort),
   publishInstanceManifest: (instanceId: string, basePort?: number) =>
@@ -549,6 +613,8 @@ export const api = {
 
   onHostLog: (cb: (p: { id: string; line: string }) => void) => bridge.on('event:host-log', cb),
   onHostExit: (cb: (p: { id: string; code: number | null }) => void) => bridge.on('event:host-exit', cb),
+  onRoomManifestProgress: (cb: (p: { instanceId: string; done: number; total: number }) => void) =>
+    bridge.on('event:room-manifest-progress', cb),
 
   // ---- 错误日志 ----
   reportError: (scope: string, message: string, detail?: string) =>
@@ -579,6 +645,12 @@ export const api = {
 
   // ---- 数据包 ----
   worlds: (instanceId: string) => call<string[]>('content:worlds', instanceId),
+  // 存档工坊（E 方向）
+  saveWorlds: (instanceId: string) => call<SaveWorld[]>('saves:worlds', instanceId),
+  inspectWorld: (instanceId: string, folder: string) => call<SaveInspect>('saves:inspect-world', instanceId, folder),
+  snapshotLevel: (instanceId: string, folder: string) => call<string>('saves:snapshot-level', instanceId, folder),
+  patchLevel: (instanceId: string, folder: string, patch: LevelPatch) =>
+    call<PatchResult>('saves:patch-level', instanceId, folder, patch),
   datapacks: (instanceId: string, world: string) => call<ContentItem[]>('content:datapacks', instanceId, world),
   importDatapack: (instanceId: string, world: string) =>
     call<ContentItem[]>('content:datapack-import', instanceId, world),
@@ -655,6 +727,7 @@ export const api = {
       installed: string[]
       failed: number
     }>('mods:fix-deps', instanceId, modids),
+  /** 依赖图：谁依赖谁 / 谁和谁冲突 / 缺了哪个前置 */  modGraph: (instanceId: string) => call<ModGraph>('mods:graph', instanceId),
   /** 体检常驻：开始盯这个实例的 mods 目录（结果通过 onModsDiagnosis 推过来） */
   startModWatch: (instanceId: string) => call<boolean>('mods:watch-start', instanceId),
   stopModWatch: () => call<boolean>('mods:watch-stop'),
@@ -731,7 +804,9 @@ export const api = {
   accountInfo: () => call<{ loggedIn: boolean; email?: string; displayName?: string; userId?: string }>('account:info'),
   onProgress: (cb: (p: ProgressPayload) => void) => bridge.on('event:progress', cb),
   onLog: (cb: (p: { instanceId: string; line: string }) => void) => bridge.on('event:launch-log', cb),
-  onLaunchState: (cb: (p: LaunchStatePayload) => void) => bridge.on('event:launch-state', cb)
+  onLaunchState: (cb: (p: LaunchStatePayload) => void) => bridge.on('event:launch-state', cb),
+  /** 浏览器登录回跳 wfmc:// 时主进程发过来的事件（参数是原始 url） */
+  onProtocol: (cb: (url: string) => void) => bridge.on('event:protocol', cb)
 }
 
 /** 版本清单里的 type 翻成人话（愚人节版本在清单里也算 snapshot，只能靠 id 认） */

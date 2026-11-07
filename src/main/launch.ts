@@ -130,10 +130,13 @@ export async function launchInstance(
       const savesDir = path.join(gameDir, 'saves')
       const hasSaves = fs.existsSync(savesDir) && fs.readdirSync(savesDir).length > 0
       if (hasSaves) {
-        const file = backupSaves(instance.id)
-        if (file) {
+        const bk = backupSaves(instance.id)
+        if (bk) {
           pruneSaveBackups(instance.id)
-          onLog(instance.id, `[WFMC] 启动前已备份存档：${path.basename(file)}`)
+          onLog(
+            instance.id,
+            `[WFMC] 启动前已备份存档：${path.basename(bk.file)}（${bk.worlds.length} 个世界 / ${bk.files} 个文件）`
+          )
         }
       }
     } catch (e) {
