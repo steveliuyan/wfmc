@@ -2,7 +2,38 @@ import { BrowserWindow, app, clipboard, dialog, ipcMain, net, shell } from 'elec
 import fs from 'node:fs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
-import type { ContentKind, Instance, ProgressPayload, Settings } from '../shared/types'
+import type { CloudSettings, ContentKind, Instance, ProgressPayload, Settings, StorageKind } from '../shared/types'
+import {
+  cloudAccount,
+  cloudStatus,
+  defaultLocalDir,
+  deleteCloudBackup,
+  deleteLocalBackup,
+  ensureCloudDevice,
+  fetchAnnouncements,
+  listCloudBackups,
+  listLocalBackups,
+  loginCloud,
+  logoutCloud,
+  migrateBackups,
+  restoreCloudBackup,
+  restoreLocalBackup,
+  saveCloudSettings,
+  saveLocalDir,
+  saveWebdavSettings,
+  testCloudConnection,
+  testStorage,
+  unpairCloudDevice,
+  uploadConfigBackup
+} from './cloudsync'
+import { listNotifications, markNotificationsRead, popSystemNotice } from './notify'
+import {
+  accountInfo as unifiedAccountInfo,
+  isLoggedIn as unifiedIsLoggedIn,
+  login as unifiedLogin,
+  logout as unifiedLogout,
+  refresh as unifiedRefresh
+} from './cloudlogin'
 import { cleanCategory, dataUsage } from './diskusage'
 import { searchLocal } from './search'
 import { store } from './store'
@@ -734,6 +765,115 @@ ipcMain.handle('data:size', () => store.dataSize())
   )
   ipcMain.handle('content:export-diagnostics', (_e, instanceId: string) => exportDiagnostics(instanceId))
   ipcMain.handle('net:speedtest', async () => await speedTest())
+
+  // ---------- 备份（本地优先，云端 = 统一账号） ----------
+  // 约定：这里只做参数校验 + 转发，业务都在 cloudsync.ts，网络在 unifiedapi/cloudsnap.ts。
+  ipcMain.handle('cloud:settings', () => store.settings.cloud ?? null)
+  ipcMain.handle('cloud:save-settings', (_e, patch: Partial<CloudSettings>) => saveCloudSettings(patch ?? {}))
+  ipcMain.handle('cloud:test', () => testCloudConnection())
+  ipcMain.handle('cloud:ensure', (_e, force?: boolean) => ensureCloudDevice(!!force))
+  ipcMain.handle('cloud:unpair', () => {
+    unpairCloudDevice()
+    return true
+  })
+  ipcMain.handle('cloud:status', () => cloudStatus())
+  ipcMain.handle('cloud:backups', () => listCloudBackups())
+  ipcMain.handle('cloud:local-backups', () => listLocalBackups())
+  ipcMain.handle('cloud:upload', () =>
+    runTask('misc', '备份配置', async (ctx) => {
+      const r = await uploadConfigBackup((p) => {
+        ctx.report({
+          phase: p.phase,
+          current: p.loaded,
+          total: p.total
+        })
+      })
+      if (!r.ok) throw new Error(r.message)
+      return r
+    })
+  )
+  ipcMain.handle('cloud:restore', (_e, id: string) => restoreCloudBackup(String(id ?? '')))
+  ipcMain.handle('cloud:restore-local', (_e, id: string) => restoreLocalBackup(String(id ?? '')))
+  ipcMain.handle('cloud:delete-local', (_e, id: string) => deleteLocalBackup(String(id ?? '')))
+  ipcMain.handle('cloud:delete', (_e, id: string) => deleteCloudBackup(String(id ?? '')))
+  ipcMain.handle('cloud:announcements', (_e, force?: boolean) => fetchAnnouncements(!!force))
+  // ---------- 应用内通知（服务端 app_notification；只有已读，没有删除） ----------
+  ipcMain.handle('notify:list', () => listNotifications())
+  ipcMain.handle('notify:read', (_e, ids: number[]) => markNotificationsRead(ids))
+  /** mode='popup' 的通知才走这里：Windows 右下角弹系统通知 */
+  ipcMain.handle('notify:pop', (_e, p: { title?: string; body?: string }) => popSystemNotice(p ?? {}))
+
+  // ---------- 备份位置：本地文件夹 / 自己的 WebDAV ----------
+  // 数据格式完全一样（b_<id>.zip + index.json），所以两者之间可以互相搬迁。
+  ipcMain.handle('cloud:webdav-save', (_e, patch: { url?: string; username?: string; dir?: string; password?: string }) =>
+    saveWebdavSettings(patch ?? {})
+  )
+  ipcMain.handle('cloud:local-dir', (_e, dir: string) => saveLocalDir(String(dir ?? '')))
+  ipcMain.handle('cloud:local-pick', async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: '选一个存放备份的文件夹',
+      defaultPath: defaultLocalDir(),
+      properties: ['openDirectory', 'createDirectory']
+    }
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const r = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    if (r.canceled || !r.filePaths[0]) return ''
+    saveLocalDir(r.filePaths[0])
+    return r.filePaths[0]
+  })
+  ipcMain.handle('cloud:storage-test', () => testStorage())
+  ipcMain.handle('cloud:migrate', (_e, from?: StorageKind) => migrateBackups(from))
+
+  // ---------- 统一账号（浏览器登录 api.20050905.xyz，见 cloudlogin.ts） ----------
+  // 老的「用户名密码 / 2FA / 设备绑定」接口全部废掉了：账号体系已经合并，
+  // 客户端只负责「打开浏览器 → 等回调 → 存令牌」。
+  const unifiedStatus = () => {
+    const info = unifiedAccountInfo()
+    return {
+      loggedIn: info.loggedIn,
+      username: info.displayName || info.email,
+      email: info.email,
+      displayName: info.displayName,
+      accountId: info.userId,
+      accountKind: 'unified' as const
+    }
+  }
+  ipcMain.handle('account:status', () => unifiedStatus())
+  ipcMain.handle('account:login', async () => {
+    const r = await loginCloud()
+    return { ok: r.ok, message: r.message, status: unifiedStatus() }
+  })
+  ipcMain.handle('account:logout', () => {
+    logoutCloud()
+    return { ok: true, message: '已退出登录', status: unifiedStatus() }
+  })
+  ipcMain.handle('account:refresh', async () => {
+    const r = await unifiedRefresh()
+    return { ok: r.ok, message: r.message, status: unifiedStatus() }
+  })
+  ipcMain.handle('account:info', () => cloudAccount())
+  ipcMain.handle('account:logged-in', () => unifiedIsLoggedIn())
+  // 保留通道名，避免旧渲染层调用时报「no handler registered」
+  ipcMain.handle('account:register', async () => {
+    const r = await unifiedLogin()
+    return { ok: r.ok, message: r.message, status: unifiedStatus() }
+  })
+  ipcMain.handle('account:login-2fa', () => ({
+    ok: false,
+    need2fa: false,
+    message: '现在是在浏览器里登录，不需要在这里填两步验证码'
+  }))
+  ipcMain.handle('account:me', () => unifiedAccountInfo())
+  ipcMain.handle('account:devices', () => [])
+  ipcMain.handle('account:change-password', () => ({
+    ok: false,
+    message: '改密码请到网页上改：https://api.20050905.xyz/account'
+  }))
+  ipcMain.handle('account:2fa-setup', () => ({ ok: false, message: '两步验证在网页上设置' }))
+  ipcMain.handle('account:2fa-enable', () => ({ ok: false, message: '两步验证在网页上设置' }))
+  ipcMain.handle('account:2fa-disable', () => ({ ok: false, message: '两步验证在网页上设置' }))
+  ipcMain.handle('account:bind-device', () => ({ ok: true, message: '不需要绑定设备' }))
+  ipcMain.handle('account:unbind-device', () => ({ ok: true, message: '不需要绑定设备' }))
   /** 安装版才有卸载器：exe 同目录的 "Uninstall *.exe" */
   /** 贴链接直接下载（多线程 + 可暂停），存到 <dataDir>/downloads */
   ipcMain.handle('dl:start-url', async (_e, url: string) => {

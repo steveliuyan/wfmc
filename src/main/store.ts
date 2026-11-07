@@ -7,7 +7,7 @@ import { migrateSettings } from './config-migrate'
 const ENC_PREFIX = 'enc:'
 
 /** 用系统凭据加密令牌（Windows DPAPI），落盘时不出现明文 */
-function encryptToken(value?: string): string | undefined {
+export function encryptToken(value?: string): string | undefined {
   if (!value) return value
   try {
     if (safeStorage.isEncryptionAvailable()) {
@@ -19,7 +19,7 @@ function encryptToken(value?: string): string | undefined {
   return value
 }
 
-function decryptToken(value?: string): string | undefined {
+export function decryptToken(value?: string): string | undefined {
   if (!value || !value.startsWith(ENC_PREFIX)) return value
   try {
     return safeStorage.decryptString(Buffer.from(value.slice(ENC_PREFIX.length), 'base64'))

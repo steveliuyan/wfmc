@@ -13,6 +13,8 @@ const PAIRS: [string, string][] = [
   ['已取消', 'Cancelled'],
   ['操作已取消', 'Cancelled'],
   ['提示', 'Notice'],
+  ['通知', 'Notifications'],
+  ['已读', 'Read'],
   ['警告', 'Warning'],
   ['错误', 'Error'],
   ['失败', 'Failed'],
@@ -406,6 +408,8 @@ const PAIRS: [string, string][] = [
   ['松手就装', 'Drop to install'],
   ['登录已过期，请重新登录', 'Login expired — please sign in again'],
   ['微软登录即将过期，点这里续期', 'Microsoft login expires soon — renew now'],
+  ['提示：接下来是微软官方页面，标题可能写着「Minecraft」——内置的是微软给 Minecraft 的公共应用 ID，不是我们自己的。', 'Note: the next page is Microsoft\'s own — its title may say "Minecraft" because the built-in ID is Microsoft\'s public Minecraft app, not ours.'],
+  ['想让它显示成 WFMC 的名字和图标，见下面「高级」里注册自己的 Azure 应用。', 'To show WFMC\'s own name and icon there, register your own Azure app (see Advanced below).'],
 
   // ===== 内容管理 =====
   ['内容管理', 'Content'],

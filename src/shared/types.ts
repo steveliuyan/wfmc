@@ -77,6 +77,132 @@ export interface Settings {
   launchCheckMods?: boolean
   /** 首页下面几块卡片的排列顺序（自己拖着改的） */
   homeLayout?: string[]
+  /**
+   * 云同步（自建服务端）。**默认关闭**，没配就完全不会发任何网络请求。
+   * 客户端这一侧只是「按契约打 HTTP」，服务端契约见 docs/SERVER-API.md。
+   */
+  cloud?: CloudSettings
+}
+
+/**
+ * 配置备份存到哪里：
+ * - wfmc   旧的 WFMC 云同步后端（已废弃，只为读老配置保留，实际按 local 处理）
+ * - webdav 任意标准 WebDAV（坚果云 / Nextcloud / 群晖…），账号密码用户自己填
+ * - local  本地文件夹（可以选同步盘目录）
+ */
+export type StorageKind = 'wfmc' | 'webdav' | 'local'
+
+/** WebDAV 后端的连接参数（密码不在这里：加密存在 cloud-auth.json，渲染层拿不到） */
+export interface WebdavSettings {
+  url?: string
+  username?: string
+  /** 远端目录，默认 /wfmc */
+  dir?: string
+}
+
+/** 云同步设置（不含令牌：令牌单独加密存在 cloud-auth.json，渲染层永远拿不到） */
+export interface CloudSettings {
+  /** 总开关 */
+  enabled: boolean
+  /** 备份存到哪个后端（不填 = local；'wfmc' 已废弃，会被当成 local） */
+  storage?: StorageKind
+  /** WebDAV 后端的连接参数 */
+  webdav?: WebdavSettings
+  /** 本地文件夹后端用的目录 */
+  localDir?: string
+  /** @deprecated 服务器地址由客户端固定，不再允许用户填；旧配置里的值会被清掉 */
+  baseUrl?: string
+  /** @deprecated 已经不需要「设备名」这个概念，旧配置里的值会被清掉 */
+  deviceName?: string
+  /** 启动后自动上传配置备份 */
+  autoBackup: boolean
+  /** 自动备份间隔（小时） */
+  intervalH: number
+  /** @deprecated 保留份数由服务端统一定（自动 3 / 手动 5），客户端只读 */
+  keep?: number
+  /** 是否拉公告 */
+  announcements: boolean
+  /** 上次备份成功时间 */
+  lastBackupAt?: number
+  /** 上次失败原因（成功就清空） */
+  lastError?: string
+  /** 上次测通的时间 */
+  lastOkAt?: number
+  /** 服务端告诉我们的设备名 / 配额说明，仅供展示 */
+  serverNote?: string
+}
+
+/** 公告条目（服务端 GET /api/v1/announcements 的一项） */
+export interface CloudAnnouncement {
+  id: string
+  level: 'info' | 'warn' | 'critical'
+  title: string
+  body?: string
+  url?: string
+  pinned?: boolean
+  publishedAt?: number
+  expiresAt?: number
+  minVersion?: string
+  maxVersion?: string | null
+}
+
+/** 云端一条备份（GET /api/v1/backups 的一项） */
+export interface CloudBackup {
+  id: string
+  kind: 'config' | 'instance'
+  size: number
+  sha256?: string
+  createdAt: number
+  instanceName?: string
+  appVersion?: string
+  note?: string
+}
+
+/** GET /api/v1/health 的返回 */
+export interface CloudHealth {
+  ok: boolean
+  name?: string
+  version?: string
+  time?: number
+  /** 服务端要求的客户端最低版本（可选） */
+  minClientVersion?: string
+  /** 服务端给的提示（展示在设置页） */
+  note?: string
+}
+
+/** 云同步的整体状态（渲染层用） */
+export interface CloudStatus {
+  configured: boolean
+  hasToken: boolean
+  /** @deprecated 不再有设备概念 */
+  deviceId?: string
+  /** @deprecated 不再有设备名 */
+  deviceName?: string
+  online?: boolean
+  error?: string
+  /** @deprecated 服务器地址不在界面上显示 */
+  baseUrl?: string
+  /** @deprecated 服务器地址不在界面上显示 */
+  isDefaultServer?: boolean
+  /** 服务端自我介绍（GET /health 的 name/version/note） */
+  server?: { name?: string; version?: string; note?: string }
+  /** 当前用的备份后端（不填按 local 处理） */
+  storage?: StorageKind
+  /** 当前后端的一句话说明（设置页显示用） */
+  storageLabel?: string
+  /** 当前后端实际用到的地址 / 目录 */
+  storageTarget?: string
+  /** WebDAV 是否已经存了密码 */
+  webdavHasPass?: boolean
+  webdavUsable?: boolean
+  localUsable?: boolean
+  /** 统一账号（云端）登录情况 */
+  account?: { loggedIn: boolean; email?: string; displayName?: string; userId?: string }
+  /** 服务端定的保留份数（只读展示） */
+  limits?: { autoKeep: number; manualKeep: number }
+  /** 本地已有的备份 */
+  localBackups?: CloudBackup[]
+  backups: CloudBackup[]
 }
 
 /** 收藏的一个资源项目 */
@@ -467,4 +593,90 @@ export interface SearchHit {
   instanceId?: string
   /** 内容类命中：内容管理里哪个 tab */
   tab?: 'mods' | 'resourcepacks' | 'shaderpacks' | 'saves'
+}
+
+// ---------------- WFMC 账号（云同步账号，跟微软 / MC 正版账号完全无关） ----------------
+// 只用于云备份归属、多设备管理和后台统计；密码只存我们自己的服务器。
+
+export interface WfmcAccount {
+  id: string
+  username: string
+  email?: string
+  createdAt: number
+  lastLoginAt?: number
+  totpEnabled: boolean
+  recoveryLeft?: number
+  status?: string
+  accountKind?: string
+}
+
+export interface WfmcDevice {
+  deviceId: string
+  name?: string
+  platform?: string
+  accountId?: string
+  createdAt?: number
+  lastSeenAt?: number
+  boundAt?: number
+  backups?: number
+  bytes?: number
+}
+
+export interface WfmcAccountStatus {
+  loggedIn: boolean
+  username?: string
+  /** 统一账号的邮箱 */
+  email?: string
+  /** 统一账号的显示名 */
+  displayName?: string
+  accountId?: string
+  /** @deprecated 服务器地址不在界面上显示 */
+  baseUrl?: string
+  deviceBound?: boolean
+  accountKind: 'wfmc' | 'unified'
+}
+
+export interface WfmcLoginOutcome {
+  need2fa: boolean
+  challengeToken?: string
+  expiresIn?: number
+  status?: WfmcAccountStatus
+}
+
+/** 浏览器登录统一账号的结果 */
+export interface UnifiedLoginResult {
+  ok: boolean
+  message: string
+  status?: WfmcAccountStatus
+}
+
+export interface WfmcAccountMe {
+  account: WfmcAccount
+  devices: WfmcDevice[]
+  totalBackups?: number
+  totalBytes?: number
+  quotaBytes?: number
+  maxBackups?: number
+  accountKind?: string
+}
+
+/** 一条服务端通知（服务端表 app_notification） */
+export interface NotifyItem {
+  id: number
+  title: string
+  body: string
+  url: string
+  /** info | warn | important（服务端叫 important，界面上显示「重要」） */
+  level: string
+  /** silent | popup */
+  mode: string
+  createdAt: string
+  /** 服务端记录的已读；未登录时永远是 false，已读状态在渲染层本地存 */
+  read: boolean
+}
+
+export interface NotifyListResult {
+  items: NotifyItem[]
+  /** 登录了 = 服务端能记住谁读过；未登录 = 只能记在这台电脑上 */
+  loggedIn: boolean
 }

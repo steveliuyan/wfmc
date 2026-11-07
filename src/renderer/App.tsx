@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import lottie, { type AnimationItem } from 'lottie-web'
 import { LauncherProvider, useLauncher } from './store'
 import { api, type AccountHealth, type SearchHit } from './api'
+import type { NotifyItem } from '../shared/types'
 import { translate } from './i18n'
 import Select from './components/Select'
 import Home from './views/Home'
@@ -19,6 +20,8 @@ import { setAutoI18n } from './autoI18n'
 import { setDeepLink } from './deeplink'
 import Manage from './views/Manage'
 import SettingsView from './views/Settings'
+import Notify from './views/Notify'
+import NoticePopup from './views/NoticePopup'
 import Tour from './components/Tour'
 import { tourSteps } from './tour-steps'
 import logoHorizontal from './assets/lottie-horizontal.json'
@@ -34,6 +37,7 @@ export type PageId =
   | 'hosting'
   | 'skin'
   | 'manage'
+  | 'notify'
   | 'settings'
 
 /** 一组细线图标（SVG），配合 CSS 做 hover/active 动效 */
@@ -115,8 +119,17 @@ export const Icons = {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8Z" />
     </svg>
+  ),
+  bell: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 8a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6" />
+      <path d="M13.7 20a2 2 0 0 1-3.4 0" />
+    </svg>
   )
 }
+
+/** 已读通知 id 存这儿（纯 UI 状态，不是凭证） */
+const NOTICE_SEEN_KEY = 'wfmc.notices.seen'
 
 const nav: { id: PageId; label: string; icon: keyof typeof Icons }[] = [
   { id: 'home', label: '首页', icon: 'home' },
@@ -128,6 +141,7 @@ const nav: { id: PageId; label: string; icon: keyof typeof Icons }[] = [
   { id: 'hosting', label: '一键开服', icon: 'play' },
   { id: 'skin', label: '皮肤 · 外置登录', icon: 'user' },
   { id: 'manage', label: '内容管理', icon: 'layers' },
+  { id: 'notify', label: '通知', icon: 'bell' },
   { id: 'settings', label: '设置', icon: 'settings' }
 ]
 
@@ -412,10 +426,116 @@ function Shell() {
   const [dropHint, setDropHint] = useState(false)
   const [dropKind, setDropKind] = useState<'file' | 'link'>('file')
 
+  // 服务端通知：主进程拉（未登录也能拉公开公告），渲染层只负责显示。
+  // 已读：登录了由服务端记；未登录只存 localStorage 的 id（不是凭证）。
+  const [notifyItems, setNotifyItems] = useState<NotifyItem[]>([])
+  const [notifyLoggedIn, setNotifyLoggedIn] = useState(false)
+  /** 待弹的「弹窗」类通知（mode='popup'），一次显示队首那条 */
+  const [popupQueue, setPopupQueue] = useState<NotifyItem[]>([])
+  /** 本次运行里已经弹过的 id：同一条不会每分钟重复弹（重启后仍未读会再弹一次，符合「打开应用就弹」） */
+  const poppedRef = useRef<Set<string>>(new Set())
+  const [noticeSeen, setNoticeSeen] = useState<string[]>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(NOTICE_SEEN_KEY) || '[]') as unknown
+      return Array.isArray(raw) ? (raw as string[]) : []
+    } catch {
+      return []
+    }
+  })
+  const markNoticesSeen = useCallback((ids: string[]) => {
+    setNoticeSeen((prev) => {
+      const next = Array.from(new Set([...prev, ...ids]))
+      try {
+        localStorage.setItem(NOTICE_SEEN_KEY, JSON.stringify(next.slice(-200)))
+      } catch {
+        /* 存不了就算了，下次还提示一遍 */
+      }
+      return next
+    })
+  }, [])
+
+  const isNoticeRead = useCallback(
+    (n: NotifyItem) => n.read || noticeSeen.includes(String(n.id)),
+    [noticeSeen]
+  )
+
+  /** 确认一条通知：本地立刻标已读；登录了再告诉服务端（未登录只记本机） */
+  const ackNotice = useCallback(
+    (n: NotifyItem) => {
+      markNoticesSeen([String(n.id)])
+      void api.notificationRead([n.id]).catch(() => undefined)
+    },
+    [markNoticesSeen]
+  )
+
+  /** 关掉一条弹窗通知：ack=true 表示点了「知道了」（确认已读），false 是「稍后再看」 */
+  const dismissPopup = useCallback(
+    (n: NotifyItem, ack: boolean) => {
+      if (ack) ackNotice(n)
+      setPopupQueue((prev) => prev.filter((x) => String(x.id) !== String(n.id)))
+    },
+    [ackNotice]
+  )
+
+  const loadNotices = useCallback(
+    async (announce = false) => {
+      const r = await api.notifications().catch(() => undefined)
+      if (!r) return
+      setNotifyItems(r.items)
+      setNotifyLoggedIn(r.loggedIn)
+
+      // ---- mode='popup'（后台勾了「弹窗」）：模态弹窗 + 右下角系统通知，一条只弹一次 ----
+      const fresh = r.items.filter(
+        (n) => n.mode === 'popup' && !n.read && !noticeSeen.includes(String(n.id)) && !poppedRef.current.has(String(n.id))
+      )
+      if (fresh.length) {
+        for (const n of fresh) poppedRef.current.add(String(n.id))
+        setPopupQueue((prev) => {
+          const have = new Set(prev.map((x) => String(x.id)))
+          return [...prev, ...fresh.filter((n) => !have.has(String(n.id)))]
+        })
+        const top = fresh[0]
+        const more = fresh.length > 1 ? `（还有 ${fresh.length - 1} 条）` : ''
+        void api
+          .notificationPop({ title: top.title || 'WFMC 通知', body: `${top.body || top.title || ''}${more}` })
+          .catch(() => undefined)
+      }
+
+      if (!announce) return
+      // 「重要」的未读进去了弹一句 toast（本地标过已读就不再弹；已经走上面弹窗的不再重复）
+      const hot = r.items.find(
+        (n) =>
+          !n.read &&
+          !noticeSeen.includes(String(n.id)) &&
+          n.mode !== 'popup' &&
+          (n.level === 'important' || n.level === 'critical')
+      )
+      if (hot) toast(hot.title || '服务端有一条新通知', 'info')
+    },
+    [noticeSeen, toast]
+  )
+
   useEffect(() => {
     const t = setTimeout(() => setBooted(true), 900)
     return () => clearTimeout(t)
   }, [])
+
+  // 服务端通知：启动几秒后拉一次，之后每分钟拉一次（拉不到就当没有）
+  useEffect(() => {
+    if (!booted) return
+    let alive = true
+    const first = setTimeout(() => {
+      if (alive) void loadNotices(true)
+    }, 6000)
+    const timer = setInterval(() => {
+      if (alive) void loadNotices(false)
+    }, 60000)
+    return () => {
+      alive = false
+      clearTimeout(first)
+      clearInterval(timer)
+    }
+  }, [booted, loadNotices])
 
   // 前端错误也记进本地日志（诊断包会带上）
   useEffect(() => {
@@ -629,6 +749,7 @@ function Shell() {
   // 有搜索词时把「真搜到的东西」放前面，静态入口退到后面；没词就只列入口
   const paletteItems = (q ? [...hitItems, ...filteredStatic] : filteredStatic).slice(0, 40)
   const paletteCur = Math.min(paletteSel, Math.max(0, paletteItems.length - 1))
+  const unreadNotices = notifyItems.filter((n) => !isNoticeRead(n))
   if (!ready || !booted) {
     return (
       <>
@@ -663,7 +784,7 @@ function Shell() {
             >
               <span className="nav-icon">{Icons[item.icon]}</span>
               <span className="nav-label">{translate(settings?.language, `nav.${item.id}`, item.label)}</span>
-              <span className="nav-dot" />
+              <span className={`nav-dot ${item.id === 'notify' && unreadNotices.length ? 'on' : ''}`} />
             </button>
           ))}
         </nav>
@@ -812,6 +933,15 @@ function Shell() {
         {page === 'hosting' && <Hosting goto={setPage} />}
         {page === 'skin' && <Skin />}
         {page === 'manage' && <Manage goto={setPage} />}
+        {page === 'notify' && (
+          <Notify
+            items={notifyItems}
+            loggedIn={notifyLoggedIn}
+            isRead={isNoticeRead}
+            onAck={ackNotice}
+            onRefresh={() => void loadNotices(false)}
+          />
+        )}
         {page === 'settings' && <SettingsView />}
       </main>
 
@@ -833,6 +963,15 @@ function Shell() {
 
       <TaskPanel />
 
+      {popupQueue.length > 0 && (
+        <NoticePopup
+          item={popupQueue[0]}
+          remaining={popupQueue.length}
+          onAck={(n) => dismissPopup(n, true)}
+          onLater={(n) => dismissPopup(n, false)}
+        />
+      )}
+
       {tourOpen && <Tour steps={tourSteps} goto={(p) => setPage(p as PageId)} onClose={closeTour} />}
 
       {dropHint && (
@@ -847,6 +986,7 @@ function Shell() {
           </div>
         </div>
       )}
+
 
       {paletteOpen && (
         <div className="palette-mask" onClick={() => setPaletteOpen(false)}>

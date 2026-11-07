@@ -172,6 +172,9 @@ a:hover {
   flex-direction: column;
   padding: 18px 14px;
   transition: background 0.25s ease;
+  /* 关键：网格项默认 min-height:auto 会撑破 100% 高度，导致底部一行被窗口切掉 */
+  min-height: 0;
+  overflow: hidden;
 }
 
 .brand {
@@ -289,11 +292,31 @@ nav {
   50% { opacity: 0.65; box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 0%, transparent); }
 }
 
+/* 底部这组（实例/账号/主题）不许被压扁；窗口矮时由上面的导航区自己滚 */
 .sidebar-foot {
   margin-top: auto;
   border-top: 1px solid var(--line);
-  padding-top: 14px;
+  padding-top: 12px;
+  flex: 0 0 auto;
 }
+
+/* 导航区可收缩 + 可滚动：高度不足时不再把底部的音乐/主题行挤出窗口 */
+.sidebar > nav {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  padding-right: 2px;
+  margin-right: -2px;
+}
+
+.sidebar > nav::-webkit-scrollbar { width: 6px; }
+.sidebar > nav::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+.sidebar > nav::-webkit-scrollbar-track { background: transparent; }
 
 .mini-label {
   font-size: 11px;
@@ -401,12 +424,14 @@ nav {
 
 .theme-switch {
   display: flex;
+  align-items: center;
   gap: 6px;
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .theme-btn {
   flex: 1;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -414,7 +439,7 @@ nav {
   border: 1px solid var(--line);
   color: var(--muted);
   border-radius: 9px;
-  padding: 7px 0;
+  padding: 0;
   cursor: pointer;
   transition: 0.16s;
 }
@@ -427,7 +452,7 @@ nav {
 .theme-btn.text {
   flex: 1.6;
   font-size: 11.5px;
-  padding: 7px 4px;
+  padding: 0 4px;
 }
 
 .theme-btn:hover {
@@ -1994,8 +2019,8 @@ label.full {
 }
 
 .music.inline .music-toggle {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: 9px;
   font-size: 15px;
   box-shadow: none;
@@ -3785,8 +3810,10 @@ textarea:focus {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  /* 浮出的名字要能溢出到右边 */
+  /* 浮出的名字要能溢出到右边，还得压在右边卡片之上
+     （卡片有 fadeUp 动画残留的 transform，会自成一层，rail 不给 z-index 的话 tooltip 会被它盖住） */
   overflow: visible;
+  z-index: 5;
 }
 
 .settings-rail button {
@@ -4159,6 +4186,250 @@ textarea:focus {
   gap: 12px;
   padding: 8px 14px;
   border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* ── 云同步面板（Settings → 云同步） ───────────────────────── */
+.cloud-badge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-3) 80%, transparent);
+  border: 1px solid var(--line);
+}
+
+.cloud-badge.ok {
+  color: #1a7f37;
+  background: color-mix(in srgb, #2ea043 16%, var(--bg-3));
+  border-color: color-mix(in srgb, #2ea043 35%, var(--line));
+}
+
+.cloud-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.cloud-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-3) 55%, transparent);
+  font-size: 12.5px;
+}
+
+/* ── 服务端通知（侧栏按钮 + 弹窗） ─────────────────────────── */
+.notice-banner .notice-bell {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.notice-banner.unread {
+  border-color: color-mix(in srgb, var(--danger, #d9534f) 45%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--danger, #d9534f) 14%, transparent),
+    color-mix(in srgb, var(--danger, #d9534f) 5%, transparent)
+  );
+}
+
+.notice-banner.unread .notice-bell {
+  color: var(--danger, #d9534f);
+}
+
+.notice-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 330;
+  background: rgba(12, 16, 28, 0.4);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6vh 4vw;
+}
+
+.notice-card {
+  width: 620px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: slideIn 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+.notice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.notice-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.notice-title svg {
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+
+.notice-list {
+  padding: 12px 14px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.notice-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-3) 55%, transparent);
+}
+
+.notice-item.warn {
+  border-color: color-mix(in srgb, #d29922 45%, var(--line));
+  background: color-mix(in srgb, #d29922 8%, var(--bg-3));
+}
+
+.notice-item.crit {
+  border-color: color-mix(in srgb, #d9534f 50%, var(--line));
+  background: color-mix(in srgb, #d9534f 10%, var(--bg-3));
+}
+
+.notice-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.notice-item-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.notice-item-time {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.notice-tag {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-2) 70%, transparent);
+}
+
+.notice-tag.warn {
+  color: #8a6100;
+  border-color: color-mix(in srgb, #d29922 45%, var(--line));
+}
+
+.notice-tag.crit {
+  color: #b02a25;
+  border-color: color-mix(in srgb, #d9534f 50%, var(--line));
+}
+
+/* 「弹窗」类通知（后台勾选「弹窗（打开应用就弹出来）」= display_mode='popup'） */
+.dialog.notice-popup {
+  width: 440px;
+}
+
+.dialog.notice-popup.warn {
+  border-color: color-mix(in srgb, #d29922 40%, var(--line));
+}
+
+.dialog.notice-popup.crit {
+  border-color: color-mix(in srgb, #d9534f 45%, var(--line));
+}
+
+.notice-popup-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.notice-popup-more {
+  margin-left: auto;
+}
+
+.notice-popup-body {
+  color: var(--text);
+  white-space: pre-wrap;
+  max-height: 42vh;
+  overflow-y: auto;
+}
+
+.notice-item-body {
+  margin-top: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  opacity: 0.9;
+}
+
+.notice-item .btn {
+  margin-top: 8px;
+}
+
+/* ── 通知页（侧栏「通知」入口 + 红点） ─────────────────────── */
+.nav-item .nav-dot.on {
+  opacity: 1;
+  transform: scale(1);
+  width: 7px;
+  height: 7px;
+  background: var(--danger, #d9534f);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.notice-page {
+  padding: 0;
+  gap: 10px;
+  overflow: visible;
+}
+
+.notice-page .notice-item.unread {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+}
+
+.notice-page .notice-item.read {
+  opacity: 0.74;
+}
+
+.notice-read-tag {
   font-size: 11.5px;
   color: var(--muted);
 }

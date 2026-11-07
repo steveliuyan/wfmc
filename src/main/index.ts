@@ -7,6 +7,7 @@ import { installGlobalHandlers, logError } from './errlog'
 import { flushMetaCache } from './content'
 import { refreshTray, setupTray } from './tray'
 import { applyProxy, installChromiumFetch } from './proxy'
+import { startCloudScheduler, stopCloudScheduler } from './cloudsync'
 
 const devUrl = process.env.VITE_DEV_SERVER_URL
 
@@ -149,6 +150,10 @@ app.on('render-process-gone', (_e, _wc, details) => {
 })
 
 app.whenReady().then(async () => {
+    // Windows 右下角系统通知要靠 AppUserModelID 才认得是谁发的。
+    // 安装版（NSIS）有开始菜单快捷方式，这里显式设一次更稳；portable 版没有快捷方式，
+    // toast 可能被系统吞掉 —— 所以「弹窗」类通知同时还弹界面里的模态框，不单靠系统通知。
+    app.setAppUserModelId('com.wanfan.wfmc')
     Menu.setApplicationMenu(null)
     store.load()
     // 主进程的网络统一走 Chromium：环境变量里的残留代理不会再把请求带沟里
@@ -158,6 +163,8 @@ app.whenReady().then(async () => {
     const win = createWindow()
     setMainWindow(win)
     setupTray(win)
+    // 云同步（默认关；没配置的话 startCloudScheduler 内部直接返回，不发任何请求）
+    startCloudScheduler()
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) setMainWindow(createWindow())
@@ -165,7 +172,10 @@ app.whenReady().then(async () => {
   })
 
   // 退出前把 jar 元数据缓存落盘，下次进内容管理不用再拆一遍压缩包
-  app.on('will-quit', () => flushMetaCache())
+  app.on('will-quit', () => {
+    stopCloudScheduler()
+    flushMetaCache()
+  })
 
   app.on('window-all-closed', () => {
     // 有托盘在，窗口关掉不退出（服务端还能继续跑），只有「退出」菜单/强制退出才真的结束

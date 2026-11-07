@@ -95,3 +95,16 @@ node scripts\opensource.mjs --repo wfmc --message "feat: WFMC X.Y.Z …"
 - 打包时的 electron / electron-builder 二进制走 `.npmrc` 里配的 npmmirror 镜像，不用手设 `ELECTRON_MIRROR`。
 - `release\win-unpacked\WFMC.exe` 是免安装版主程序，`HANDOFF.md` §9 的 `WFMC_SHOT*` 环境变量可以给它截图，方便验收界面。
 - 涉及文件系统合并/备份的逻辑（模组快照、整合包升级、存档快照）都有纯函数 + 临时脚本单测的路子：用 esbuild 把模块 bundle 出来，`--alias:electron=./scripts/tmp-electron-stub.cjs` 顶掉 electron，再 `node` 跑断言。**验证完把临时脚本删掉。**
+
+## 7. 交接文档：每做一块功能，必须留一份「接手能直接开工」的文档
+
+用户的硬要求：**干什么都要做交接文档，让后续接手的人（或 AI）能快速理解。**
+
+- 改动涉及**新模块 / 新 IPC / 新外部依赖（服务端、第三方 API）**时，除了改代码，还要落文档：
+  - 项目整体的：更新 `HANDOFF.md` 对应小节（§2.1 模块表、§4 IPC 表、§7 之类的专题节）；
+  - 对外契约（服务端接口、别人要对齐的协议）：单独一份放到 `docs/`，例如 `docs/SERVER-API.md`，
+    **协议改了先改这份文档**，再改客户端；
+  - 长期计划：`ROADMAP-1.2.0.md`（分版本交付顺序、风险登记、每版 checklist）。
+- 文档要写「**为什么**」和「**坑**」，不是只抄代码：数据落在哪、失败怎么降级、哪些字段绝不能上传/外传、
+  以及**还没做的部分**（接手最容易踩的就是不知道边界在哪）。
+- 判断标准：一个没参与过的人只看这份文档 + 代码，能在半小时内说清「这块干什么、改哪里、怎么验」。

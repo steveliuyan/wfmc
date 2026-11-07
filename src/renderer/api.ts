@@ -4,6 +4,11 @@ import type {
   Account,
   ContentItem,
   ContentKind,
+  CloudAnnouncement,
+  CloudBackup,
+  CloudHealth,
+  CloudSettings,
+  CloudStatus,
   CrashDiagnosis,
   CrashReport,
   Instance,
@@ -11,6 +16,7 @@ import type {
   JavaInfo,
   LaunchStatePayload,
   LoaderOption,
+  NotifyListResult,
   PlanInstallResult,
   ProgressPayload,
   RemoteVersion,
@@ -19,10 +25,13 @@ import type {
   SavedServer,
   ServerStatus,
   Settings,
+  StorageKind,
   ThemeMode,
+  UnifiedLoginResult,
   WorldPackCheck,
   WorldPackResult,
-  WorldRestoreResult
+  WorldRestoreResult,
+  WfmcAccountStatus
 } from '../shared/types'
 import type { CleanResult, DiskUsage, SearchHit } from '../shared/types'
 export type { SearchHit }
@@ -654,6 +663,72 @@ export const api = {
   exportMrpack: (instanceId: string) => call<string>('modpack:export-mrpack', instanceId),  inspectMrpack: (file: string) =>
     call<{ name?: string; versionId?: string; files: number; deps?: Record<string, string> }>('modpack:inspect', file),
 
+  // ---------------- 云同步（自建服务端，契约见 docs/SERVER-API.md） ----------------
+  cloudSettings: () => call<CloudSettings | null>('cloud:settings'),
+  saveCloudSettings: (patch: Partial<CloudSettings>) => call<CloudSettings>('cloud:save-settings', patch),
+  testCloud: () =>
+    call<{ health?: CloudHealth; authorized: boolean; message: string }>('cloud:test'),
+  ensureCloud: (force?: boolean) => call<{ ok: boolean; message: string }>('cloud:ensure', !!force),
+  unpairCloud: () => call<boolean>('cloud:unpair'),
+  cloudStatus: () => call<CloudStatus>('cloud:status'),
+  cloudBackups: () => call<CloudBackup[]>('cloud:backups'),
+  cloudLocalBackups: () => call<CloudBackup[]>('cloud:local-backups'),
+  cloudUpload: () => call<{ ok: boolean; message: string; pruned?: number }>('cloud:upload'),
+  cloudRestore: (id: string) =>
+    call<{
+      ok: boolean
+      message: string
+      result?: {
+        settingsApplied: boolean
+        accountsRestored: number
+        instancesAdded: number
+        instancesSkipped: number
+        serversRestored: number
+        needRestart: boolean
+        safetyDir: string
+      }
+    }>('cloud:restore', id),
+  cloudDelete: (id: string) => call<void>('cloud:delete', id),
+  cloudRestoreLocal: (id: string) =>
+    call<{
+      ok: boolean
+      message: string
+      result?: {
+        settingsApplied: boolean
+        accountsRestored: number
+        instancesAdded: number
+        instancesSkipped: number
+        serversRestored: number
+        needRestart: boolean
+        safetyDir: string
+      }
+    }>('cloud:restore-local', id),
+  cloudDeleteLocal: (id: string) => call<void>('cloud:delete-local', id),
+  cloudAnnouncements: (force?: boolean) => call<CloudAnnouncement[]>('cloud:announcements', !!force),
+  /** 应用内通知：未登录也能拉（公开公告），登录后带服务端已读标记 */
+  notifications: () => call<NotifyListResult>('notify:list'),
+  /** 标记已读；未登录时主进程直接返回（本地已读由界面自己记） */
+  notificationRead: (ids: number[]) =>
+    call<{ ok: boolean; message: string; loggedIn: boolean }>('notify:read', ids),
+  /** 弹系统通知（Windows 右下角）：只给服务端 mode='popup' 的新通知用 */
+  notificationPop: (p: { title?: string; body?: string }) =>
+    call<{ ok: boolean; message: string }>('notify:pop', p),
+
+  // ---------------- 备份位置（本地文件夹 / 自己的 WebDAV） ----------------
+  saveWebdav: (patch: { url?: string; username?: string; dir?: string; password?: string }) =>
+    call<CloudSettings>('cloud:webdav-save', patch),
+  saveLocalDir: (dir: string) => call<CloudSettings>('cloud:local-dir', dir),
+  pickLocalDir: () => call<string>('cloud:local-pick'),
+  storageTest: () => call<{ ok: boolean; message: string }>('cloud:storage-test'),
+  cloudMigrate: (from?: StorageKind) =>
+    call<{ ok: boolean; copied: number; skipped: number; failed: string[]; message: string }>('cloud:migrate', from),
+
+  // ---------------- 统一账号（浏览器登录，跟微软/MC 正版账号无关） ----------------
+  accountStatus: () => call<WfmcAccountStatus>('account:status'),
+  accountLogin: () => call<UnifiedLoginResult>('account:login'),
+  accountLogout: () => call<UnifiedLoginResult>('account:logout'),
+  accountRefresh: () => call<UnifiedLoginResult>('account:refresh'),
+  accountInfo: () => call<{ loggedIn: boolean; email?: string; displayName?: string; userId?: string }>('account:info'),
   onProgress: (cb: (p: ProgressPayload) => void) => bridge.on('event:progress', cb),
   onLog: (cb: (p: { instanceId: string; line: string }) => void) => bridge.on('event:launch-log', cb),
   onLaunchState: (cb: (p: LaunchStatePayload) => void) => bridge.on('event:launch-state', cb)

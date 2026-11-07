@@ -7,6 +7,8 @@ import { CREDITS, CREDIT_KIND_LABEL, type CreditKind } from '../../shared/credit
 import Select from '../components/Select'
 import Disclaimer from './Disclaimer'
 import UpdateCenter from './UpdateCenter'
+import CloudPanel from '../components/CloudPanel'
+import WfmcAccountPanel from '../components/WfmcAccountPanel'
 import { deriveAccent } from '../color'
 
 /** Aikar 的 G1GC 参数（社区公认的 Minecraft 服务端/客户端优化组合） */
@@ -29,6 +31,8 @@ const RAIL: { id: string; label: string; icon: string }[] = [
   { id: 'java', label: 'Java 运行时', icon: '☕' },
   { id: 'accounts', label: '账号', icon: '👤' },
   { id: 'curseforge', label: 'CurseForge', icon: '🔑' },
+  { id: 'cloud', label: '云同步', icon: '☁' },
+  { id: 'wfmc', label: '云账号', icon: '👥' },
   { id: 'update', label: '更新', icon: '🔄' },
   { id: 'credits', label: '致谢', icon: '💖' },
   { id: 'about', label: '关于', icon: 'ℹ' }
@@ -185,6 +189,16 @@ export default function SettingsView() {
   const jumpTo = (id: string) => {
     document.getElementById(`set-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
+
+  // 别的面板让我跳到某个分区（比如备份面板的「去「账号」里登录」）
+  useEffect(() => {
+    const onJump = (e: Event) => {
+      const id = String((e as CustomEvent).detail || '')
+      if (id) jumpTo(id)
+    }
+    window.addEventListener('wfmc:goto-section', onJump)
+    return () => window.removeEventListener('wfmc:goto-section', onJump)
+  }, [])
 
   if (!settings) return <div className="page">加载中…</div>
 
@@ -1150,8 +1164,16 @@ export default function SettingsView() {
               </div>
               {msInfo && (
                 <div className="card inner">
-                  打开 <a onClick={() => api.openExternal(msInfo.verificationUri)}>{msInfo.verificationUri}</a>
-                  ，输入代码：<b className="code">{msInfo.userCode}</b>
+                  <div>
+                    打开 <a onClick={() => api.openExternal(msInfo.verificationUri)}>{msInfo.verificationUri}</a>
+                    ，输入代码：<b className="code">{msInfo.userCode}</b>
+                  </div>
+                  <div className="muted small" style={{ marginTop: 6 }}>
+                    提示：接下来是微软官方页面，标题可能写着「Minecraft」——内置的是微软给 Minecraft 的公共应用 ID，不是我们自己的。
+                  </div>
+                  <div className="muted small">
+                    想让它显示成 WFMC 的名字和图标，见下面「高级」里注册自己的 Azure 应用。
+                  </div>
                 </div>
               )}
             </div>
@@ -1287,6 +1309,16 @@ export default function SettingsView() {
                     ? `当前已保存（尾号 ${settings.curseforgeApiKey.slice(-4)}）`
                     : '还没填。在 console.curseforge.com 免费申请，填完点「保存」。'}
             </p>
+          </section>
+
+          {/* ── 云同步（自建服务端） ─────────────────── */}
+          <section id="set-cloud" className="card set-card">
+            <CloudPanel />
+          </section>
+
+          {/* ── WFMC 云账号（跟微软账号无关） ─────────── */}
+          <section id="set-wfmc" className="card set-card">
+            <WfmcAccountPanel />
           </section>
 
           {/* ── 更新 ────────────────────────────────── */}
