@@ -322,5 +322,10 @@ export const PAIRS: [string, string][] = [
   ['开服支持定时备份、定时重启、日志轮转，进程掉了会自动拉起。', 'Hosting now supports scheduled backups, scheduled restarts and log rotation, and the process is restarted automatically if it dies.'],
   ['存档页能改难度、游戏规则、时间和出生点，改之前自动打一份快照。', 'The saves page can change difficulty, gamerules, time and spawn point, and takes a snapshot before every change.'],
   ['截图页每张图都能做成分享卡，可以存到截图目录或直接复制图片。', 'Every screenshot can be turned into a share card, saved to the screenshots folder or copied as an image.'],
-  ['设置里可以切英文界面。', 'You can switch the interface to English in Settings.']
+  ['设置里可以切英文界面。', 'You can switch the interface to English in Settings.'],
+
+  // ---------- 1.3.0 升级公告 ----------
+  ['存档工坊改成灰度默认关：要用先在「设置 → 界面与行为」里打开；不开也能看存档列表和体检，只是不能改。', 'Save Workshop is now an opt-in experimental feature: turn it on under Settings → Interface and behavior. With it off you can still browse saves and run the check-up, just not edit them.'],
+  ['核心逻辑补了 11 组自动化断言：NBT 读写往返、依赖成环、联机清单编解码与差分，一条 npm run test:core 跑完。', 'Added 11 automated assertions for core logic: NBT read/write round-trips, dependency cycles, and room manifest encode/decode plus diffing — all run by npm run test:core.'],
+  ['中文化自检阈值提到 100%：以后漏翻一句，npm run i18n:check 直接失败。', 'The translation self-check now requires 100%: a single untranslated string makes npm run i18n:check fail.']
 ]

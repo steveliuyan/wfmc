@@ -477,10 +477,20 @@ ipcMain.handle('data:size', () => store.dataSize())
   // ---------- 存档工坊（E 方向）：只改白名单字段，改前强制快照 ----------
   ipcMain.handle('saves:worlds', (_e, instanceId: string) => listSaveWorlds(instanceId))
   ipcMain.handle('saves:inspect-world', (_e, instanceId: string, folder: string) => inspectSave(instanceId, folder))
-  ipcMain.handle('saves:snapshot-level', (_e, instanceId: string, folder: string) => snapshotLevel(instanceId, folder))
-  ipcMain.handle('saves:patch-level', (_e, instanceId: string, folder: string, patch: LevelPatch) =>
-    patchLevel(instanceId, folder, patch)
-  )
+  // 写 level.dat 一律要「存档工坊」灰度开关（默认关）：只读的列表 / 体检不受影响
+  const assertWorkshopOn = () => {
+    if (!store.settings.saveWorkshop) {
+      throw new Error('存档工坊还没打开：设置 → 界面与行为 → 存档工坊（实验功能）')
+    }
+  }
+  ipcMain.handle('saves:snapshot-level', (_e, instanceId: string, folder: string) => {
+    assertWorkshopOn()
+    return snapshotLevel(instanceId, folder)
+  })
+  ipcMain.handle('saves:patch-level', (_e, instanceId: string, folder: string, patch: LevelPatch) => {
+    assertWorkshopOn()
+    return patchLevel(instanceId, folder, patch)
+  })
   ipcMain.handle('crash:list', (_e, instanceId: string) => listCrashReports(instanceId))
   ipcMain.handle('crash:read', (_e, instanceId: string, target: string) => readCrashReport(instanceId, target))
   ipcMain.handle('crash:diagnose', (_e, instanceId: string) => analyzeLatest(instanceId))

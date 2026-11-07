@@ -73,6 +73,13 @@ export interface Settings {
   configVersion?: number
   /** 启动前自动备份存档（默认开）—— 存档回滚的后悔药全靠它 */
   autoBackupSaves?: boolean
+  /**
+   * 存档工坊（实验功能，默认关）。
+   * 它是唯一会写用户 level.dat 的功能（写坏不可逆），所以灰度放：没开这一项时，
+   * 「内容管理 → 存档工坊」页签不显示，主进程的 saves:snapshot-level / saves:patch-level 也直接拒绝。
+   * 只读的存档列表 / 体检不受影响，一直可用。
+   */
+  saveWorkshop?: boolean
   /** 启动前跑一遍模组体检，有 error 级问题（重复 mod / 加载器不匹配 / 前置被禁用）就先拦一下（默认开） */
   launchCheckMods?: boolean
   /** 首页下面几块卡片的排列顺序（自己拖着改的） */

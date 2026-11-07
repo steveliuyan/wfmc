@@ -385,6 +385,28 @@ export default function SettingsView() {
                 </div>
                 <div>
                   <div className="set-block-title" style={{ fontWeight: 400, marginBottom: 6, fontSize: 12 }}>
+                    存档工坊（实验功能）
+                  </div>
+                  <div className="chips">
+                    <button
+                      className={`chip ${settings.saveWorkshop === true ? 'on' : ''}`}
+                      onClick={() => saveSettings({ saveWorkshop: true })}
+                    >
+                      开着（能改 level.dat）
+                    </button>
+                    <button
+                      className={`chip ${settings.saveWorkshop !== true ? 'on' : ''}`}
+                      onClick={() => saveSettings({ saveWorkshop: false })}
+                    >
+                      关掉（只读查看）
+                    </button>
+                  </div>
+                  <div className="muted small" style={{ marginTop: 6 }}>
+                    改存档会写 level.dat，写坏不可逆；每次写入前都会自动打一份快照。不开这项时，内容管理里不显示「存档工坊」，存档列表和体检照常可看。
+                  </div>
+                </div>
+                <div>
+                  <div className="set-block-title" style={{ fontWeight: 400, marginBottom: 6, fontSize: 12 }}>
                     启动前跑一遍模组体检
                   </div>
                   <div className="chips">

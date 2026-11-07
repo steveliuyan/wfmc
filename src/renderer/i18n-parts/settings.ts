@@ -56,6 +56,13 @@ export const PAIRS: [string, string][] = [
   ['启动前跑一遍模组体检', 'Run a mod check-up before launch'],
   ['开着（重复 mod / 加载器不对先拦一下）', 'On (catch duplicate mods or a wrong loader first)'],
   ['关掉（直接启动）', 'Off (launch directly)'],
+  ['存档工坊（实验功能）', 'Save Workshop (experimental)'],
+  ['开着（能改 level.dat）', 'On (can edit level.dat)'],
+  ['关掉（只读查看）', 'Off (read-only)'],
+  [
+    '改存档会写 level.dat，写坏不可逆；每次写入前都会自动打一份快照。不开这项时，内容管理里不显示「存档工坊」，存档列表和体检照常可看。',
+    'Editing a save writes level.dat, and a bad write cannot be undone; a snapshot is taken before every write. While this is off, Save Workshop is hidden from Content, but the save list and check-up still work.'
+  ],
   ['语言', 'Language'],
   ['中文', 'Chinese'],
   ['语言目前覆盖导航 / 页面标题 / 主要按钮，正文文案仍在逐页补。', 'The language switch covers navigation, page titles and main buttons; body text is still being filled in page by page.'],

@@ -733,3 +733,39 @@ i18n 覆盖率：npm run i18n:check → 100%（1193 条，阈值 98%）
 - 联机清单只比 `mods`，资源包 / 光影 / 配置不同步；
 - 存档工坊**只改白名单字段**，不是通用 NBT 编辑器（乱改 `level.dat` 会把存档写坏，故意没开放）；
 - 插件搜索只接了 Hangar 与 Modrinth（SpigotMC 没有公开 API）。
+
+## 28. 第九批：1.3.0 收口（存档工坊转灰度 + 核心断言 + 严格的翻译卡口）
+
+1.2.0 把六个方向一次发出去之后，1.3.0 没有加新功能，只做三件「防守」的事。
+
+| 改动 | 用户看到什么 | 入口 |
+|---|---|---|
+| 存档工坊转灰度 | 默认看不到「存档工坊」页签；要用先去设置里打开。不开也能看存档列表和体检 | 设置 → 界面与行为 → 存档工坊（实验功能） |
+| 核心逻辑 11 组自动化断言 | 用户看不到，但 NBT 读写、依赖成环、联机清单编解码与差分被钉死了 | `npm run test:core` |
+| 翻译卡口提到 100% | 漏翻一句就构建失败，英文界面不会再有半中半英的新句子 | `npm run i18n:check` |
+
+### 加了什么
+
+- **存档工坊灰度**：它是唯一会写 `level.dat` 的功能（写坏不可逆），所以按计划先灰度。开关是 `settings.json` 的 `saveWorkshop`，默认关。渲染层藏页签 + 主进程拦 `saves:snapshot-level` / `saves:patch-level` 双保险；只读的存档列表、`region/*.mca` 体检不受影响。
+- **`npm run test:core`**：新建 `scripts/test-core.mjs` + `scripts/tests/core.ts`，用 esbuild 把主进程模块打成临时包、把 `electron` 换成内存桩，不启 Electron 直接跑断言。11 组：NBT 三种压缩往返 / 坏字节报错 / 路径读写、依赖图 DAG·三元环·自环、缺前置占位点与 breaks 边、清单编解码（sha1 裁 16 位）、清单差分三分 + 环境护栏 + 下载体积、存档白名单字段路径规整。
+- **翻译卡口**：`i18n:check` 阈值 98% → 100%。
+
+### 实测记录（1.3.0，2026-11-08）
+
+```
+npm run typecheck  → 0 error
+npm run test:core  → 11 组全部通过
+npm run i18n:check → 1196 条中文字面量，精确 888 + 动态 265 + 长词部分 43，未翻 0，覆盖率 100%（阈值 100%）
+npm run build      → built in 2.50s（index-*.js 1,128.69 kB / gzip 327.46 kB，skinview3d 515.28 kB）
+npm run dist       → WFMC-Portable-1.3.0.exe 98,018,004 字节 / WFMC-Setup-1.3.0.exe 98,191,741 字节；
+                     两次「no code signing certificate configured, signing is skipped」= 签名骨架不阻塞打包
+截图自检（shot.ps1）→ settings：出现「存档工坊（实验功能）」两个 chip
+                    → manage（灰度关）：模组/依赖/资源包/光影/存档/数据包/截图/Mod 更新/崩溃报告/运行日志，没有「存档工坊」
+                    → manage（saveWorkshop=true）：tab 里出现「存档工坊」，排在「存档」后面
+```
+
+### 边界
+
+- 断言只覆盖纯函数：要读写真实实例目录的 `listSaves` / `patchLevel`、以及依赖图的实际布局，仍靠真机冒烟；
+- 「长词部分命中」只保证扫描器不红，英文模式下那句仍是半中半英——新写的长句子还是要进 `i18n-parts/*.ts` 配一句英文；
+- 灰度开关没做「首次打开时弹提示」，只在设置里写了解释文字。

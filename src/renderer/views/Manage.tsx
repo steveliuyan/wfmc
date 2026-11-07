@@ -29,6 +29,10 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     useLauncher()
   const t = useT()
   const [tab, setTab] = useState<Tab>('mods')
+  // 存档工坊是灰度功能：开关关掉时把页签弹回「模组」，别停在空白页
+  useEffect(() => {
+    if (tab === 'workshop' && !settings?.saveWorkshop) setTab('mods')
+  }, [tab, settings?.saveWorkshop])
   // 内容管理自己的目标实例：不用跑回首页/实例页去切
   const [targetId, setTargetId] = useState('')
   const [items, setItems] = useState<ContentItem[]>([])
@@ -232,7 +236,7 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
           </p>
         </div>
         <div className="tabs">
-          {tabs.map((t) => (
+          {(settings?.saveWorkshop ? tabs : tabs.filter((x) => x.id !== 'workshop')).map((t) => (
             <button key={t.id} className={tab === t.id ? 'on' : ''} onClick={() => setTab(t.id)} data-tour={`mg-tab-${t.id}`}>
               {t.label}
             </button>
@@ -1076,7 +1080,7 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
         </div>
       )}
 
-      {tab === 'workshop' && <SaveWorkshop instanceId={activeId} />}
+      {tab === 'workshop' && settings?.saveWorkshop && <SaveWorkshop instanceId={activeId} />}
 
       {tab === 'shots' && (
         <div className="card">
