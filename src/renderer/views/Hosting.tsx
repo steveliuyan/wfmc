@@ -610,7 +610,7 @@ export default function Hosting({ goto }: { goto: (p: PageId) => void }) {
                   <button
                     className="btn sm"
                     onClick={async () => {
-                      const file = await api.pickFile()
+                      const file = await api.pickFile([{ name: '服务端文件', extensions: ['jar', 'zip', 'mrpack', 'tar', 'gz'] }, { name: '所有文件', extensions: ['*'] }])
                       if (!file) return
                       try {
                         toast('正在从整合包提取 mod…')

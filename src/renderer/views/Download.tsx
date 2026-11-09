@@ -1,5 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api, formatSize, friendlyError, progressPercent, progressText, versionTypeLabel } from '../api'
+
+/** 剩余时间：只按当前这一条进度自己的实时速度算（和上面显示的 ↓ 速度同源，不会自相矛盾） */
+function etaLabel(remainBytes: number, speed: number): string {
+  if (speed <= 0) return ''
+  const left = remainBytes / speed
+  if (!isFinite(left) || left <= 0) return ''
+  if (left > 3600) return `剩 ${Math.floor(left / 3600)}:${String(Math.floor((left % 3600) / 60)).padStart(2, '0')}:${String(Math.floor(left % 60)).padStart(2, '0')}`
+  const mm = Math.floor(left / 60)
+  const ss = Math.floor(left % 60)
+  return `剩 ${mm}:${String(ss).padStart(2, '0')}`
+}
 import type { RemoteVersion } from '../../shared/types'
 import { useLauncher, useT } from '../store'
 import SourcePicker from '../components/SourcePicker'
@@ -308,18 +319,23 @@ export default function Download({ goto }: { goto: (p: 'instances') => void }) {
           </div>
           {currentProgress.map((p, i) => {
             const pct = progressPercent(p)
-            const paused = pausedKeys[p.key]
+            // 两条暂停路径都要认：这里点的（pausedKeys）、任务面板点的（主进程已经把 phase 改成「已暂停 · …」）
+            const paused = pausedKeys[p.key] || /^已暂停/.test(p.phase ?? '')
+            const speed = paused ? 0 : speeds[p.key] ?? 0
+            const remain = Math.max(0, (p.totalBytes ?? 0) - (p.bytes ?? 0))
             const live = p.phase && !/完成|失败|已取消/.test(p.phase)
             return (
               <div className="progress-row" key={i}>
                 <div className="progress-label">
                   <span>{p.phase}</span>
                   <span className="progress-nums muted">
-                    {live && (speeds[p.key] ?? 0) > 0 && (
+                    {live && speed > 0 && (
                       <i className="speed" title="当前下载速度">
-                        ↓ {formatSize(speeds[p.key])}/s
+                        ↓ {formatSize(speed)}/s
                       </i>
                     )}
+                    {live && speed > 0 && remain > 0 && <i>{etaLabel(remain, speed)}</i>}
+                    {paused && live && <i>已暂停</i>}
                     {progressText(p)}
                     <b>{pct}%</b>
                   </span>

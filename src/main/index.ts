@@ -5,6 +5,7 @@ import { store } from './store'
 import { registerIpc, setMainWindow } from './ipc'
 import { installGlobalHandlers, logError } from './errlog'
 import { flushMetaCache } from './content'
+import { flushModMetaCache } from './moddoctor'
 import { refreshTray, setupTray } from './tray'
 import { applyProxy, installChromiumFetch } from './proxy'
 import { startCloudScheduler, stopCloudScheduler } from './cloudsync'
@@ -221,6 +222,7 @@ app.whenReady().then(async () => {
   app.on('will-quit', () => {
     stopCloudScheduler()
     flushMetaCache()
+    flushModMetaCache()
   })
 
   app.on('window-all-closed', () => {

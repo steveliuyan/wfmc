@@ -890,9 +890,14 @@ function Shell() {
             <button
               className="account-warn"
               onClick={async () => {
-                const res = await api.refreshExpiringAccounts().catch(() => ({ refreshed: [], failed: [] }))
+                const res = await api
+                  .refreshExpiringAccounts()
+                  .catch(() => ({ refreshed: [], failed: [], reasons: [] }))
                 if (res.refreshed.length) toast(`已续期：${res.refreshed.join('、')}`, 'success')
-                else if (res.failed.length) toast(`续期失败：${res.failed.join('、')}，请到「设置」重新登录`, 'error')
+                if (res.failed.length) {
+                  const why = res.reasons?.length ? res.reasons.join('；') : res.failed.join('、')
+                  toast(`续期失败：${why}`, 'error')
+                }
                 setHealth(await api.accountHealth().catch(() => []))
               }}
             >

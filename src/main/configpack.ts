@@ -188,18 +188,29 @@ export function applyConfigBundle(zipPath: string): ApplyConfigResult {
   if (accountsText) {
     try {
       const raw = JSON.parse(accountsText) as { accounts?: Partial<Account>[] }
-      const list = (raw.accounts ?? [])
-        .filter((a) => !!a?.id && !!a?.name)
-        .map((a) => ({
-          id: String(a.id),
-          type: a.type ?? 'offline',
+      const incoming = (raw.accounts ?? []).filter((a) => !!a?.id && !!a?.name)
+      // 绝不能用备份里的账号覆盖本机账号：本机那份带着 refresh token，覆盖掉就得重新登录
+      // （用户报过「正版账号老要续期 / 续期失败」，根因就是还原配置包时把令牌抹了）。
+      // 这里只补本机没有的账号，且补进来的没有令牌。
+      const byId = new Set(store.accounts.map((a) => a.id))
+      const byUuid = new Set(store.accounts.map((a) => a.uuid).filter(Boolean))
+      const added: Account[] = []
+      for (const a of incoming) {
+        const id = String(a.id)
+        const uuid = String(a.uuid ?? '')
+        if (byId.has(id) || (uuid && byUuid.has(uuid))) continue
+        byId.add(id)
+        if (uuid) byUuid.add(uuid)
+        added.push({
+          id,
+          type: (a.type as Account['type']) ?? 'offline',
           name: String(a.name),
-          uuid: String(a.uuid ?? ''),
-          accessToken: '',
-          refreshToken: undefined
-        })) as Account[]
-      store.setAccounts(list)
-      accountsRestored = list.length
+          uuid,
+          accessToken: ''
+        })
+      }
+      if (added.length > 0) store.setAccounts([...store.accounts, ...added])
+      accountsRestored = added.length
     } catch {
       /* 忽略 */
     }

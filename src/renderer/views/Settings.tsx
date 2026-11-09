@@ -52,9 +52,31 @@ function SetHead({ icon, title, desc }: { icon: string; title: string; desc?: Re
 
 export default function SettingsView() {
   const { settings, saveSettings, dataDir, accounts, refreshAccounts, refreshInstances, toast, current, resolvedTheme, setTheme, askConfirm } = useLauncher()
+  // 圆角滑块的草稿值：拖动时只改它（即时预览），松手才写盘。
+  // 以前 onChange 直接 saveSettings → IPC 写 settings.json + 整个 Settings 回灌全树重渲染，拖起来又卡又抖。
+  const [radiusDraft, setRadiusDraft] = useState<number | null>(null)
+  const themeCustom = settings?.themeCustom
+  const radius = radiusDraft ?? themeCustom?.radius ?? 14
+  const commitRadius = (v: number) => {
+    setRadiusDraft(null)
+    if ((themeCustom?.radius ?? 14) !== v) {
+      void saveSettings({ themeCustom: { ...themeCustom, radius: v } })
+    }
+  }
   const [pinfo, setPinfo] = useState<Awaited<ReturnType<typeof api.dataSharedInfo>> | undefined>()
   // 找回旧数据：机器上所有存过数据的目录（老名字的、便携版的、安装版的）
   const [foundData, setFoundData] = useState<Awaited<ReturnType<typeof api.dataDiscover>>>([])
+  // 全盘扫描（只扫到第二层：F:\data 这种放在别的盘的也能捞出来）
+  const [scanning, setScanning] = useState(false)
+  /** 扫到 / 手动挑到的目录并进列表（按路径去重，分数高的排前面） */
+  const mergeFound = (hits: Awaited<ReturnType<typeof api.dataDiscover>>) =>
+    setFoundData((prev) => {
+      const merged = [...prev]
+      for (const h of hits) {
+        if (!merged.some((m) => m.dir.toLowerCase() === h.dir.toLowerCase())) merged.push(h)
+      }
+      return merged.sort((a, b) => b.score - a.score)
+    })
   // 数据目录占用（主进程有缓存，点了才统计）
   const [dataSize, setDataSize] = useState<{ bytes: number; partial: boolean } | null>(null)
   // 占用明细（实例 / 下载 / 缓存 / 快照 / 日志），点按钮才走盘
@@ -315,28 +337,40 @@ export default function SettingsView() {
                   )
                 })()}
                 <label style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  圆角 {settings.themeCustom?.radius ?? 14}px
+                  圆角 {radius}px
                   <input
                     type="range"
                     min={0}
                     max={26}
-                    value={settings.themeCustom?.radius ?? 14}
-                    onChange={(e) =>
-                      saveSettings({ themeCustom: { ...settings.themeCustom, radius: Number(e.target.value) } })
-                    }
+                    value={radius}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      setRadiusDraft(v)
+                      document.documentElement.style.setProperty('--radius', `${v}px`)
+                    }}
+                    onPointerUp={() => commitRadius(radius)}
+                    onKeyUp={() => commitRadius(radius)}
+                    onBlur={() => commitRadius(radius)}
                     style={{ width: 120 }}
                   />
                 </label>
                 <button
                   className="btn sm"
                   onClick={async () => {
-                    const file = await api.pickFile()
+                    const file = await api.pickImage()
                     if (file) await saveSettings({ themeCustom: { ...settings.themeCustom, wallpaper: file } })
                   }}
                 >
                   选背景图
                 </button>
-                <button className="btn sm ghost" onClick={() => saveSettings({ themeCustom: {} })}>
+                <button
+                  className="btn sm ghost"
+                  onClick={() => {
+                    setRadiusDraft(null)
+                    document.documentElement.style.removeProperty('--radius')
+                    void saveSettings({ themeCustom: {} })
+                  }}
+                >
                   恢复默认外观
                 </button>
               </div>
@@ -772,7 +806,55 @@ export default function SettingsView() {
             </div>
 
             <div className="set-block">
-              <div className="set-block-title">找回旧数据</div>
+              <div className="set-block-title">
+                <span>找回旧数据</span>
+                <span className="set-actions">
+                  <button
+                    className="btn sm ghost"
+                    disabled={scanning}
+                    title="只往每个盘的子目录里找两层，跳过系统目录"
+                    onClick={async () => {
+                      setScanning(true)
+                      try {
+                        const hits = await api.dataScanDrives()
+                        if (!hits.length) {
+                          toast('所有盘都扫过了，没找到别的数据目录', 'info')
+                          return
+                        }
+                        mergeFound(hits)
+                        toast(`扫到 ${hits.length} 个数据目录`, 'success')
+                      } catch (e) {
+                        toast(`扫描失败：${friendlyError(e)}`, 'error')
+                      } finally {
+                        setScanning(false)
+                      }
+                    }}
+                  >
+                    {scanning ? '扫描中…' : '扫描所有磁盘'}
+                  </button>
+                  <button
+                    className="btn sm ghost"
+                    title="知道目录在哪就直接挑，不用全盘扫"
+                    onClick={async () => {
+                      const dir = await api.pickFolder()
+                      if (!dir) return
+                      try {
+                        const d = await api.dataInspectDir(dir)
+                        if (!d.instances && !d.accounts) {
+                          toast('这个目录里没有实例也没有账号，可能不是数据目录', 'info')
+                          return
+                        }
+                        mergeFound([d])
+                        toast(`已加入：${d.instances} 个实例 · ${d.accounts} 个账号`, 'success')
+                      } catch (e) {
+                        toast(`读不了这个目录：${friendlyError(e)}`, 'error')
+                      }
+                    }}
+                  >
+                    选择目录…
+                  </button>
+                </span>
+              </div>
               {foundData.length === 0 ? (
                 <p className="muted small">没找到别的数据目录。</p>
               ) : (
@@ -815,6 +897,7 @@ export default function SettingsView() {
               <p className="set-note">
                 装新版本、便携版和安装版换来换去，数据不会真的没掉 —— 只是「指向的目录」变了。
                 这里列出机器上所有存过数据的目录；账号每次启动都会自动并到一起，不用重新添加。
+                固定位置里没有的话，点「扫描所有磁盘」往别的盘里找（每个盘只看两层，F:\data 这种能扫到）。
               </p>
             </div>
 
@@ -1039,7 +1122,7 @@ export default function SettingsView() {
                 <button
                   className="btn"
                   onClick={async () => {
-                    const p = await api.pickFile()
+                    const p = await api.pickFile([{ name: 'Java 可执行文件', extensions: ['exe'] }, { name: '所有文件', extensions: ['*'] }])
                     if (p) await saveSettings({ javaPath: p })
                   }}
                 >
@@ -1335,7 +1418,7 @@ export default function SettingsView() {
           {/* ── 云同步（自建服务端）：账号 + 备份在同一个分区里 ── */}
           <section id="set-cloud" className="card set-card">
             <div id="set-wfmc">
-              <WfmcAccountPanel />
+              <WfmcAccountPanel variant="cloud" />
             </div>
             <CloudPanel />
           </section>

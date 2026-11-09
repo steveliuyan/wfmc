@@ -513,7 +513,7 @@ export default function Skin() {
                 <button
                   className="btn sm"
                   onClick={async () => {
-                    const p = await api.pickFile()
+                    const p = await api.pickImage()
                     if (p) await uploadSkinFile(p)
                   }}
                 >
@@ -535,7 +535,7 @@ export default function Skin() {
                 <button
                   className="btn sm"
                   onClick={async () => {
-                    const p = await api.pickFile()
+                    const p = await api.pickImage()
                     if (!p) return
                     try {
                       await api.uploadCape(activeAccount.id, p)

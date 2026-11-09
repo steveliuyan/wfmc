@@ -1,7 +1,7 @@
-﻿import fs from 'node:fs'
+import fs from 'node:fs'
 import path from 'node:path'
 import { AbortError } from './net'
-import { isPaused, waitIfPaused } from './pause'
+import { isPaused, setPaused, waitIfPaused } from './pause'
 import { dlFetch, noteTransferProblem } from './proxy'
 
 export { dlFetch }
@@ -149,6 +149,8 @@ export class MultiDownloader {
   private signal?: AbortSignal
   private bytes = 0
   private inflight = new Set<AbortController>()
+  /** 正在写的目标文件：取消后要拿它删掉 .part / .part.json / .tmp，别留一堆半截文件 */
+  private activeDests = new Set<string>()
   private onBytes?: (delta: number) => void
 
   private limitBytesPerSec: number
@@ -182,6 +184,16 @@ export class MultiDownloader {
     return this.canceled
   }
 
+  /** 只读地把任务信号漏出去，供 registry 反查 */
+  get signalRef(): AbortSignal | undefined {
+    return this.signal
+  }
+
+  /** 这个下载器是不是挂在给定的任务信号上（任务面板暂停时要靠它找到下载器） */
+  belongsToSignal(signal: AbortSignal): boolean {
+    return this.signal === signal
+  }
+
   /** 暂停中（自己的 pause() 或任务闸门），两种来源一视同仁 */
   private get pausedNow() {
     return this.paused || isPaused(this.signal)
@@ -191,10 +203,14 @@ export class MultiDownloader {
     this.paused = true
     for (const c of this.inflight) c.abort()
     this.inflight.clear()
+    // 顺手把任务闸门也关上：否则任务面板还显示"运行中"，而它自己的文件循环还在往下跑
+    setPaused(this.signal, true)
   }
 
   resume() {
     this.paused = false
+    // 反过来也一样：闸门不放开，恢复了也只是"看着恢复"，文件循环仍然卡在 waitIfPaused
+    setPaused(this.signal, false)
   }
 
   cancel() {
@@ -202,6 +218,22 @@ export class MultiDownloader {
     this.paused = false
     for (const c of this.inflight) c.abort()
     this.inflight.clear()
+    // 取消 = 不要了：把半截文件删干净（暂停不删，那是要接着下的）
+    void this.cleanupTemps()
+  }
+
+  /** 删掉正在下载的目标文件旁边的临时文件（.part 分片 / .part.json 断点记录 / .tmp 单流临时） */
+  private async cleanupTemps(): Promise<void> {
+    const dests = [...this.activeDests]
+    this.activeDests.clear()
+    for (const dest of dests) {
+      await Promise.all([
+        fs.promises.rm(`${dest}.part`, { force: true }).catch(() => undefined),
+        fs.promises.rm(`${dest}.part.json`, { force: true }).catch(() => undefined),
+        fs.promises.rm(`${dest}.tmp`, { force: true }).catch(() => undefined)
+      ])
+    }
+    trace('cleanup temps', dests.length)
   }
 
   /** 每个 host 的并发连接上限（Chromium 自己只有一个 host 6 条的预算，多开只会排队超时） */
@@ -251,7 +283,15 @@ export class MultiDownloader {
 
   async downloadAll(items: DlItem[], onProgress?: (done: number, total: number) => void): Promise<string[]> {
     const errors: string[] = []
-    await this.runPool(items, this.files, onProgress, errors)
+    try {
+      await this.runPool(items, this.files, onProgress, errors)
+      // worker 里 gate() 抛的 AbortError 会被 allSettled 收走，这里再兜一次
+      if (this.canceled || this.signal?.aborted) throw new AbortError()
+    } catch (e) {
+      // 任务被取消（abort）走到这里：半截文件别留着
+      if (this.canceled || this.signal?.aborted) await this.cleanupTemps()
+      throw e
+    }
     if (!this.canceled && !this.signal?.aborted && !this.pausedNow && errors.length > 0) {
       const failedDests = new Set(errors.map((e) => e.split('\u0000')[0]))
       const retry = items.filter((i) => failedDests.has(i.dest))
@@ -295,7 +335,10 @@ export class MultiDownloader {
     const n = Math.max(1, Math.min(threads, totalFiles))
     const results = await Promise.allSettled(new Array(n).fill(0).map(worker))
     for (const r of results) {
-      if (r.status === 'rejected' && r.reason instanceof AbortError && this.canceled) throw r.reason
+      // signal 被 abort（任务被取消）也算取消：不然这里把 AbortError 吞了，上层会以为"下载完成"
+      if (r.status === 'rejected' && r.reason instanceof AbortError && (this.canceled || this.signal?.aborted)) {
+        throw r.reason
+      }
     }
   }
 
@@ -310,8 +353,13 @@ export class MultiDownloader {
     // 镜像和官方在某些设置下是同一个地址，去重免得同一个地址白试好几次
     item.urls = [...new Set(item.urls.filter(Boolean))]
     const size = item.size ?? (await this.probeSize(item.urls))
-    if (size >= MIN_CHUNK && this.chunks > 1) await this.downloadChunked(item, size)
-    else await this.downloadSingle(item.urls, item.dest)
+    this.activeDests.add(item.dest)
+    try {
+      if (size >= MIN_CHUNK && this.chunks > 1) await this.downloadChunked(item, size)
+      else await this.downloadSingle(item.urls, item.dest)
+    } finally {
+      this.activeDests.delete(item.dest)
+    }
   }
 
   private async probeSize(urls: string[]): Promise<number> {
@@ -648,4 +696,25 @@ export function cancelDownload(key: string): boolean {
 export function downloaderState(key: string) {
   const dl = registry.get(key)
   return { exists: !!dl, paused: dl?.isPaused ?? false, bytes: dl?.downloaded ?? 0 }
+}
+
+/** key -> 下载器挂着的任务信号（下载面板上的暂停/取消要同步给任务树） */
+export function downloaderSignal(key: string): AbortSignal | undefined {
+  return registry.get(key)?.signalRef
+}
+
+/** 这个 key 的下载器是不是暂停着（进度文本要靠它把速度和剩余时间冻住） */
+export function isDownloadPaused(key: string): boolean {
+  return registry.get(key)?.isPaused === true
+}
+
+/** 反过来：任务面板点了暂停/继续，把挂在同一个 signal 上的下载器一起停/开 */
+export function setDownloadersPausedBySignal(signal: AbortSignal | undefined, paused: boolean): void {
+  if (!signal) return
+  for (const dl of registry.values()) {
+    if (dl.belongsToSignal(signal)) {
+      if (paused) dl.pause()
+      else dl.resume()
+    }
+  }
 }

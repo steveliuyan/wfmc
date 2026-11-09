@@ -17,6 +17,8 @@ import type {
   JavaInfo,
   LaunchStatePayload,
   LoaderOption,
+  MirrorSearchResult,
+  MirrorSite,
   NotifyListResult,
   PlanInstallResult,
   ProgressPayload,
@@ -34,9 +36,13 @@ import type {
   WorldRestoreResult,
   WfmcAccountStatus
 } from '../shared/types'
+
+/** CurseForge 里搜什么（两边共用的一份） */
+export type CfContentType = 'mod' | 'modpack' | 'resourcepack' | 'shader' | 'world'
 import type { CleanResult, DiskUsage, ModGraph, ModGraphEdge, ModGraphNode, SearchHit } from '../shared/types'
 import type { AddonHit, AddonVersion, HostedMetrics, InstalledAddon, RoomFixResult, RoomManifestDiff, RoomManifestPayload, ServerSched } from '../shared/types'
 import type { LevelPatch, PatchResult, SaveInspect, SaveWorld } from '../shared/types'
+import type { CloudSaveItem, CloudSaveLimits, CloudSaveUsage } from '../shared/types'
 export type { SearchHit, ModGraph, ModGraphEdge, ModGraphNode }
 export type { AddonHit, AddonVersion, HostedMetrics, InstalledAddon, ServerSched }
 export type { RoomFixResult, RoomManifestDiff, RoomManifestPayload }
@@ -274,6 +280,16 @@ export const api = {
     call<{ dir: string; name: string; instances: number; accounts: number; score: number; active: boolean }[]>(
       'data:discover'
     ),
+  /** 全盘扫一遍：固定位置之外，别的盘里还有没有启动器数据（层级只到 2） */
+  dataScanDrives: () =>
+    call<{ dir: string; name: string; instances: number; accounts: number; score: number; active: boolean }[]>(
+      'data:scan-drives'
+    ),
+  dataInspectDir: (dir: string) =>
+    call<{ dir: string; name: string; instances: number; accounts: number; score: number; active: boolean }>(
+      'data:inspect-dir',
+      dir
+    ),
   dataAdopt: (dir: string) =>
     call<{ dir: string; instances: number; accounts: number }>('data:adopt', dir),
   /** 启动时自动接上了旧数据的话，这里返回一条说明（只返回一次） */
@@ -301,8 +317,13 @@ export const api = {
   dataHealth: () =>
     call<{ dir: string; installDir: string; insideInstall: boolean }>('data:health'),
 
-  pickFile: () => call<string | undefined>('dialog:pick-file'),
-  pickFiles: () => call<string[]>('dialog:pick-files'),
+  pickFile: (filters?: { name: string; extensions: string[] }[]) =>
+    call<string | undefined>('dialog:pick-file', filters),
+  /** 只挑图片（背景图 / 皮肤用）：默认过滤器别是整合包 */
+  pickImage: () =>
+    call<string | undefined>('dialog:pick-file', [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }]),
+  pickFiles: (filters?: { name: string; extensions: string[] }[]) =>
+    call<string[]>('dialog:pick-files', filters),
   pickFolder: () => call<string | undefined>('dialog:pick-folder'),
   saveText: (name: string, content: string) => call<string | undefined>('dialog:save-text', name, content),
   openPath: (p: string) => call<void>('shell:open-path', p),
@@ -350,6 +371,8 @@ export const api = {
   /** 删一个资源包（顺手清 options.txt）；不传名字就卸载全部汉化包 */
   removePack: (id: string, zipName?: string) =>
     call<{ removed: string | string[]; lines: boolean }>('langpack:remove', id, zipName),
+  /** 删之前问一下要删多少（确认框里好写清楚） */
+  instanceDeleteSize: (id: string) => call<{ files: number; bytes: number }>('instance:delete-size', id),
   deleteInstance: (id: string, removeFiles: boolean) => call<void>('instance:delete', id, removeFiles),
   duplicateInstance: (id: string, name?: string) => call<Instance>('instance:duplicate', id, name),
   exportInstance: (id: string) => call<string>('instance:export', id),
@@ -362,7 +385,13 @@ export const api = {
     }>('instance:content', id),
   openInstanceFolder: (id: string) => call<void>('instance:open-folder', id),
 
+  /** 只读目录的快速列表（不带 jar 元数据）——几百个 mod 也是毫秒级 */
   listContent: (instanceId: string, kind: ContentKind) => call<ContentItem[]>('content:list', instanceId, kind),
+  /** 后台补 jar 元数据（名字/简介/图标），结果通过 onContentMeta 一批一批推过来 */
+  enrichContent: (instanceId: string, kind: ContentKind) => call<number>('content:enrich', instanceId, kind),
+  onContentMeta: (
+    cb: (p: { instanceId: string; kind: ContentKind; patches: { path: string; meta: Partial<ContentItem> }[] }) => void
+  ) => bridge.on('event:content-meta', cb),
   toggleContent: (instanceId: string, target: string) => call<ContentItem[]>('content:toggle', instanceId, target),
   enableContent: (instanceId: string, kind: ContentKind, names: string[]) =>
     call<ContentItem[]>('content:enable', instanceId, kind, names),
@@ -376,8 +405,23 @@ export const api = {
   /** 直接打开存档快照存放的文件夹 */
   openBackupsDir: () => call<void>('saves:open-backups-dir'),
   saveBackups: (instanceId: string) => call<SaveBackup[]>('saves:backups', instanceId),
+  /** 删掉一份存档快照（连带旁边的 .zip.json） */
+  deleteSaveBackup: (file: string) => call<boolean>('saves:delete-backup', file),
   restoreSaveBackup: (instanceId: string, file: string) =>
     call<RestoreBackupResult>('saves:restore-backup', instanceId, file),
+  // ---- 云端存档备份：本地那份照旧，云端只是多一层
+  /** 能不能用云端存档（登录了 + 云备份开着） */
+  cloudSavesReady: () => call<boolean>('saves:cloud-ready'),
+  /** 传一份上去；不给 file 就先现打一份本地快照再传 */
+  uploadCloudSave: (instanceId: string, file?: string) =>
+    call<{ ok: boolean; message: string; id?: string }>('saves:cloud-upload', instanceId, file),
+  cloudSaveList: (instanceId?: string) =>
+    call<{ items: CloudSaveItem[]; limits: CloudSaveLimits }>('saves:cloud-list', instanceId),
+  cloudSaveUsage: () => call<CloudSaveUsage>('saves:cloud-usage'),
+  deleteCloudSave: (id: string) => call<{ ok: boolean; message: string }>('saves:cloud-delete', id),
+  /** 从云端下载并回滚（下载前会校验 sha256，回滚前会先本地备份） */
+  restoreCloudSave: (instanceId: string, id: string, label?: string) =>
+    call<RestoreBackupResult & { file: string; downloadedBytes: number }>('saves:cloud-restore', instanceId, id, label),
   /** 手动把当前 mods 整目录打个快照 */
   backupMods: (instanceId: string) => call<string | undefined>('mods:backup', instanceId),
   modsBackups: (instanceId: string) =>
@@ -410,7 +454,8 @@ export const api = {
   removeAccount: (id: string) => call<void>('account:remove', id),
   setActiveAccount: (id: string) => call<Settings>('account:set-active', id),
   accountHealth: () => call<AccountHealth[]>('account:health'),
-  refreshExpiringAccounts: () => call<{ refreshed: string[]; failed: string[] }>('account:refresh-expiring'),
+  refreshExpiringAccounts: () =>
+    call<{ refreshed: string[]; failed: string[]; reasons: string[] }>('account:refresh-expiring'),
   loginYggdrasil: (input: { apiRoot: string; username: string; password: string }) =>
     call<{ account: Account; profiles: { id: string; name: string }[] }>('account:login-yggdrasil', input),
   listProfiles: (accountId: string) => call<{ id: string; name: string }[]>('account:profiles', accountId),
@@ -479,6 +524,16 @@ export const api = {
   }) => call<{ hits: ResourceHit[]; total: number; cn?: { matched: boolean; used: string[] } }>('resource:search', params),
   resourceVersions: (projectId: string, opts: { mcVersion?: string; loader?: string }) =>
     call<ResourceVersion[]>('resource:versions', projectId, opts),
+  /** 国内站（BBSMC / XyeBBS）搜索：只能跳浏览器下，装不了 */
+  mirrorSearch: (params: {
+    site: MirrorSite
+    type: string
+    query?: string
+    mcVersion?: string
+    loader?: string
+    page?: number
+    sort?: string
+  }) => call<MirrorSearchResult>('resource:mirror-search', params),
   planResource: (instanceId: string, type: string, projectId: string, versionId?: string) =>
     call<InstallPlan>('resource:plan', instanceId, type, projectId, versionId),
   installResource: (instanceId: string, type: string, projectId: string, versionId?: string, includeOptional: string[] = []) =>
@@ -622,12 +677,13 @@ export const api = {
   readErrors: () => call<string[]>('app:read-errors'),
 
   // ---- CurseForge（要 API Key）----
-  cfSearch: (input: { query: string; mcVersion?: string; loader?: string }) =>
+  cfSearch: (input: { query: string; mcVersion?: string; loader?: string; type?: CfContentType }) =>
     call<{
       hits: { id: number; name: string; summary: string; downloadCount: number; logoUrl?: string; url?: string }[]
       cn?: { matched: boolean; used: string[] }
     }>('cf:search', input),
-  cfInstall: (instanceId: string, modId: number) => call<string>('cf:install', instanceId, modId),
+  cfInstall: (instanceId: string, modId: number, type?: 'mod' | 'resourcepack' | 'shader', title?: string) =>
+    call<string>('cf:install', instanceId, modId, type ?? 'mod', title),
   cfTestKey: (key: string) => call<string>('cf:test-key', key),
 
   // ---- 音乐播放器 ----
@@ -733,6 +789,9 @@ export const api = {
   stopModWatch: () => call<boolean>('mods:watch-stop'),
   onModsDiagnosis: (cb: (p: { instanceId: string; issues: ModIssue[]; activeCount: number; at: number }) => void) =>
     bridge.on('event:mods-diagnosis', cb),
+  /** 手动体检的进度（拆包时每 8 个报一次），用来画进度条 */
+  onModsDiagnoseProgress: (cb: (p: { instanceId: string; done: number; total: number }) => void) =>
+    bridge.on('event:mods-diagnose-progress', cb),
   exportMrpack: (instanceId: string) => call<string>('modpack:export-mrpack', instanceId),  inspectMrpack: (file: string) =>
     call<{ name?: string; versionId?: string; files: number; deps?: Record<string, string> }>('modpack:inspect', file),
 
@@ -793,6 +852,8 @@ export const api = {
   saveLocalDir: (dir: string) => call<CloudSettings>('cloud:local-dir', dir),
   pickLocalDir: () => call<string>('cloud:local-pick'),
   storageTest: () => call<{ ok: boolean; message: string }>('cloud:storage-test'),
+  /** 打开备份所在文件夹（目录不存在会先建出来） */
+  openBackupDir: () => call<{ ok: boolean; message: string }>('cloud:open-dir'),
   cloudMigrate: (from?: StorageKind) =>
     call<{ ok: boolean; copied: number; skipped: number; failed: string[]; message: string }>('cloud:migrate', from),
 
@@ -899,4 +960,3 @@ export function friendlyError(e: unknown): string {
   if (/abort/i.test(msg)) return '操作已取消'
   return msg
 }
-

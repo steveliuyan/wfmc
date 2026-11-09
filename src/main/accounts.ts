@@ -65,8 +65,13 @@ const AAD_ENDPOINTS = {
   token: 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
 }
 
+/** 内置 client id 走 live.com 老链路，自填的 Azure 应用走 v2.0 /consumers */
+function endpointsFor(clientId: string) {
+  return clientId === DEFAULT_MS_CLIENT_ID ? LIVE_ENDPOINTS : AAD_ENDPOINTS
+}
+
 function msEndpoints() {
-  return store.settings.microsoftClientId.trim() ? AAD_ENDPOINTS : LIVE_ENDPOINTS
+  return endpointsFor(msClientId())
 }
 
 /** 微软正版登录 - 设备码流程第一步：拿到 user_code */
@@ -159,7 +164,12 @@ async function pollToken(deviceCode: string, interval: number, timeoutMs: number
   }
 }
 
-async function profileFromAccessToken(accessToken: string, refreshToken?: string, expiresIn?: number): Promise<Account> {
+async function profileFromAccessToken(
+  accessToken: string,
+  refreshToken?: string,
+  expiresIn?: number,
+  clientId?: string
+): Promise<Account> {
   const res = await fetch('https://api.minecraftservices.com/minecraft/profile', {
     headers: { Authorization: `Bearer ${accessToken}` }
   })
@@ -172,7 +182,8 @@ async function profileFromAccessToken(accessToken: string, refreshToken?: string
     uuid: profile.id,
     accessToken,
     refreshToken,
-    expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : undefined
+    expiresAt: Date.now() + (Number(expiresIn) > 0 ? Number(expiresIn) : 86_400) * 1000,
+    clientId
   }
   store.setAccounts([...store.accounts.filter((a) => a.uuid !== account.uuid), account])
   return account
@@ -185,24 +196,33 @@ export async function completeMicrosoftLogin(deviceCode: string, interval: numbe
   const { minecraftXstsResponse } = await authenticator.acquireXBoxToken(token.access_token!)
   const xuid = minecraftXstsResponse.DisplayClaims.xui[0]
   const mc = await authenticator.loginMinecraftWithXBox(xuid.uhs, minecraftXstsResponse.Token)
-  return await profileFromAccessToken(mc.access_token, token.refresh_token, mc.expires_in)
+  return await profileFromAccessToken(mc.access_token, token.refresh_token, mc.expires_in, msClientId())
 }
 
 /** 刷新即将过期的微软账号 */
-export async function refreshAccount(accountId: string): Promise<Account | undefined> {
+export async function refreshAccount(accountId: string, force = false): Promise<Account | undefined> {
   const account = store.accounts.find((a) => a.id === accountId)
   if (!account || account.type !== 'microsoft' || !account.refreshToken) return account
-  if (account.expiresAt && account.expiresAt - Date.now() > 60_000) return account
-  const clientId = msClientId()
-  if (!clientId) return account
+  // force：用户自己点了「续期」，就算还差几分钟才过期也真续一次。
+  // 以前这里直接返回旧令牌，界面报「已续期」但下次巡检又提示要续。
+  if (!force && account.expiresAt && account.expiresAt - Date.now() > 60_000) return account
+  // 微软的 refresh_token 只对签发它的 client id 有效，所以优先用这个账号登录时用的那个
+  const clientId = account.clientId || msClientId()
   const body = new URLSearchParams({
     client_id: clientId,
     grant_type: 'refresh_token',
     refresh_token: account.refreshToken,
     scope: 'XboxLive.signin offline_access'
   })
-  const token = await withRetry(() => postToken<TokenResponse>(msEndpoints().token, body))
-  if (!token.access_token) return account
+  const token = await withRetry(() => postToken<TokenResponse>(endpointsFor(clientId).token, body))
+  if (!token.access_token) {
+    // 静默返回旧账号会让界面以为续上了，实际仍然过期，必须把真实原因抛出去
+    throw new Error(
+      token.error_description ||
+        token.error ||
+        '微软没有返回新的访问令牌（refresh_token 多半已失效，需要重新登录）'
+    )
+  }
   const authenticator = new MicrosoftAuthenticator()
   const { minecraftXstsResponse } = await authenticator.acquireXBoxToken(token.access_token)
   const xuid = minecraftXstsResponse.DisplayClaims.xui[0]
@@ -211,7 +231,7 @@ export async function refreshAccount(accountId: string): Promise<Account | undef
     ...account,
     accessToken: mc.access_token,
     refreshToken: token.refresh_token ?? account.refreshToken,
-    expiresAt: Date.now() + mc.expires_in * 1000
+    expiresAt: Date.now() + (Number(mc.expires_in) > 0 ? Number(mc.expires_in) : 86_400) * 1000
   }
   store.setAccounts(store.accounts.map((a) => (a.id === account.id ? updated : a)))
   return updated
@@ -252,17 +272,25 @@ export function accountHealth(): AccountHealth[] {
 }
 
 /** 把所有快到期的账号续一遍，返回结果，交给前端提示 */
-export async function refreshExpiringAccounts(): Promise<{ refreshed: string[]; failed: string[] }> {
+export async function refreshExpiringAccounts(): Promise<{
+  refreshed: string[]
+  failed: string[]
+  reasons: string[]
+}> {
   const refreshed: string[] = []
   const failed: string[] = []
+  const reasons: string[] = []
   for (const h of accountHealth()) {
     if (!h.needsRefresh) continue
     try {
-      await refreshAccount(h.id)
+      const acc = await refreshAccount(h.id, true)
+      // 续完还快过期（或压根没拿到新令牌）别报成功，否则用户以为好了
+      if (!acc?.expiresAt || acc.expiresAt <= Date.now() + 60_000) throw new Error("续期后令牌仍然是过期状态")
       refreshed.push(h.name)
-    } catch {
+    } catch (e) {
       failed.push(h.name)
+      reasons.push(h.name + "：" + (e as Error).message)
     }
   }
-  return { refreshed, failed }
+  return { refreshed, failed, reasons }
 }

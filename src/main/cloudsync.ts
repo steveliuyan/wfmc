@@ -402,7 +402,7 @@ export async function restoreLocalBackup(id: string): Promise<{
       ok: true,
       result,
       message:
-        `还原完成：账号 ${result.accountsRestored} 个（需要重新登录）、` +
+        `还原完成：本机账号保持不变（另补回 ${result.accountsRestored} 个，需重新登录）、` +
         `新增实例 ${result.instancesAdded} 个、服务器 ${result.serversRestored} 条。` +
         `老配置已备份到 ${result.safetyDir}`
     }
@@ -440,7 +440,7 @@ export async function restoreCloudBackup(id: string): Promise<{
       ok: true,
       result,
       message:
-        `还原完成：账号 ${result.accountsRestored} 个（需要重新登录）、` +
+        `还原完成：本机账号保持不变（另补回 ${result.accountsRestored} 个，需重新登录）、` +
         `新增实例 ${result.instancesAdded} 个、服务器 ${result.serversRestored} 条。` +
         `老配置已备份到 ${result.safetyDir}`
     }

@@ -236,8 +236,13 @@ export function writeZip(outputPath: string, files: { name: string; full: string
 }
 
 /** 打包整个目录到 zip */
-export function zipDirectory(dir: string, outputPath: string): number {
-  const files = collectDirFiles(dir)
+export function zipDirectory(dir: string, outputPath: string, opts: { only?: string[] } = {}): number {
+  let files = collectDirFiles(dir)
+  // only：只要这几个一级目录（只传某几个世界时用）
+  if (opts.only?.length) {
+    const keep = new Set(opts.only)
+    files = files.filter((f) => keep.has(f.name.split(/[\\/]/)[0]))
+  }
   return writeZip(outputPath, files)
 }
 

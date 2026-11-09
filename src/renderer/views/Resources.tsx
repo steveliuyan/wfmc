@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { api, formatSize, progressPercent, progressText } from '../api'
+import { api, formatSize, progressPercent, progressText, type CfContentType } from '../api'
 import { useLauncher, useT } from '../store'
 import SourcePicker from '../components/SourcePicker'
 import Select from '../components/Select'
 import { SkeletonCards } from '../components/Skeleton'
 import ModpackSearch, { resourcePageUrl } from '../components/ModpackSearch'
+import CnMirror from '../components/CnMirror'
 import type { ContentItem, DepItem, FavResource, InstallPlan, ResourceHit, ResourceVersion } from '../../shared/types'
 
 type Kind = 'mod' | 'shader' | 'resourcepack'
@@ -16,6 +17,8 @@ const tabLabel: Record<Tab, string> = { ...kindLabel, modpack: '整合包' }
 
 /** 中文资源站：Modrinth/CurseForge 搜不到中文时，这几家是中文玩家真正在用的地方 */
 const SITES: { name: string; url: string; note: string }[] = [
+  { name: 'BBSMC', url: 'https://bbsmc.net/', note: '中文 MC 资源站（模组 / 光影 / 整合包 / 资源包），上面切「国内站」能直接搜' },
+  { name: 'XyeBBS', url: 'https://www.xyebbs.com/', note: '中文 MC 论坛资源区（整合包 / 模组 / 材质 / 汉化），上面切「国内站」能直接搜' },
   { name: 'MC 百科', url: 'https://www.mcmod.cn/', note: '中文模组 / 整合包百科，最全的中文名索引' },
   { name: '中文 Minecraft Wiki', url: 'https://zh.minecraft.wiki/', note: '官方中文百科，机制 / 物品 / 版本' },
   { name: '光影大全', url: 'https://www.minecraftzw.com/tag/shader', note: '中文光影整合站' },
@@ -44,6 +47,8 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
   const t = useT()
   const { current, currentId, instances, toast, progress, settings, saveSettings } = useLauncher()
   const [tab, setTab] = useState<Tab>('mod')
+  // 资源来源：Modrinth（能一键装）/ 国内站（BBSMC、XyeBBS，只能跳浏览器下）
+  const [cnOnly, setCnOnly] = useState(false)
   // 「整合包」分栏自己不查模组/光影，kind 用 'mod' 占位，别让下面那些 effect 空跑出错
   const kind: Kind = tab === 'modpack' ? 'mod' : tab
   const [query, setQuery] = useState('')
@@ -61,10 +66,16 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
   const [offset, setOffset] = useState(0)
   const [total, setTotal] = useState(0)
   const [cfQuery, setCfQuery] = useState('')
-  const [cfHits, setCfHits] = useState<{ id: number; name: string; summary: string; downloadCount: number; logoUrl?: string }[]>([])
+  const [cfHits, setCfHits] = useState<{ id: number; name: string; summary: string; downloadCount: number; logoUrl?: string; url?: string }[]>([])
   const [cfBusy, setCfBusy] = useState(false)
   const [cfCn, setCfCn] = useState<{ matched: boolean; used: string[] } | undefined>()
   const cfKey = (settings?.curseforgeApiKey ?? '').trim()
+  // CurseForge 搜哪一类：模组 / 整合包 / 资源包 / 光影（CF 那边是不同 classId，不是同一个列表里的筛选）
+  const [cfType, setCfType] = useState<CfContentType>('mod')
+  useEffect(() => {
+    if (tab === 'modpack') setCfType('modpack')
+    else setCfType(kind === 'shader' ? 'shader' : kind === 'resourcepack' ? 'resourcepack' : 'mod')
+  }, [tab, kind])
   // 安装目标：默认跟左侧「当前实例」走，但这里可以单独改（下两个版本时就能各装各的）
   const [targetId, setTargetId] = useState('')
   const [plan, setPlan] = useState<{ hit: ResourceHit; versionId?: string; data: InstallPlan } | null>(null)
@@ -289,7 +300,8 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
       const res = await api.cfSearch({
         query: cfQuery,
         mcVersion: mcVersion || current?.mcVersion,
-        loader: kind === 'mod' ? loaderFilter || undefined : undefined
+        loader: cfType === 'mod' ? loaderFilter || undefined : undefined,
+        type: cfType
       })
       setCfHits(res.hits)
       setCfCn(res.cn)
@@ -364,9 +376,23 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
           <span className="muted small" style={{ paddingBottom: 10 }}>
             下载了两个版本就在这切换，模组只进选中的那个实例
           </span>
+          <div className="field-mini">
+            <div className="mini-label">资源来源</div>
+            <div className="row" style={{ gap: 6 }}>
+              <button className={`chip ${!cnOnly ? 'on' : ''}`} onClick={() => setCnOnly(false)}>
+                Modrinth（可一键装）
+              </button>
+              <button className={`chip ${cnOnly ? 'on' : ''}`} onClick={() => setCnOnly(true)}>
+                国内站（浏览器下载）
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
+      {cnOnly && <CnMirror kind={kind} mcVersion={mcVersion} loader={kind === 'mod' ? loaderFilter : ''} />}
+
+      {!cnOnly && (<>
       <div className="card">
         <div className="row-between" style={{ border: 'none' }}>
           <h3 style={{ margin: 0 }}>模组 / 光影 / 资源包</h3>
@@ -602,6 +628,7 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
           </div>
         )}
       </div>
+      </>)}
 
       <div className="card">
         <div className="row-between" style={{ border: 'none' }}>
@@ -710,9 +737,20 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
           </p>
         )}
         <div className="row wrap" style={{ marginTop: 8 }}>
+          <Select
+            value={cfType}
+            width={132}
+            options={[
+              { value: 'mod', label: '模组' },
+              { value: 'modpack', label: '整合包' },
+              { value: 'resourcepack', label: '资源包' },
+              { value: 'shader', label: '光影' }
+            ]}
+            onChange={(v) => setCfType(v as CfContentType)}
+          />
           <input
             className="grow"
-            placeholder="搜 CurseForge 模组…"
+            placeholder={`搜 CurseForge ${{ mod: '模组', modpack: '整合包', resourcepack: '资源包', shader: '光影', world: '世界' }[cfType]}…`}
             value={cfQuery}
             onChange={(e) => setCfQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && doCfSearch()}
@@ -720,14 +758,14 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
           <button className="btn" disabled={cfBusy} onClick={doCfSearch}>
             {cfBusy ? '搜索中…' : '搜索 CF'}
           </button>
-          {cfHits.length > 0 && (
+          {cfHits.length > 0 && cfType !== 'modpack' && (
             <button
               className="btn primary"
               onClick={async () => {
                 if (!targetId) return toast('先选实例', 'error')
                 for (const hit of cfHits.slice(0, 3)) {
                   try {
-                    await api.cfInstall(targetId, hit.id)
+                    await api.cfInstall(targetId, hit.id, cfType as 'mod' | 'resourcepack' | 'shader', hit.name)
                     toast(`已安装 ${hit.name}`, 'success')
                   } catch (e) {
                     toast(`${hit.name} 安装失败：${(e as Error).message}`, 'error')
@@ -739,6 +777,11 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
             </button>
           )}
         </div>
+        {cfType === 'modpack' && (
+          <div className="notice-bar" style={{ marginTop: 8 }}>
+            整合包不能在实例里「安装」：点「打开网页」下载 zip，再把它拖进启动器窗口任意位置就会自动导入成一个新实例。
+          </div>
+        )}
         {cfCn?.matched && cfCn.used.length > 0 && (
           <div className="notice-bar" style={{ marginTop: 8 }}>
             中文名「{cfQuery.trim()}」自动翻成了「{cfCn.used[0]}」再搜（CurseForge 也只认英文原名）
@@ -763,20 +806,30 @@ export default function Resources({ goto }: { goto?: (p: 'settings' | 'instances
                 </div>
                 <div className="cf-side">
                   <span className="muted small">{hit.downloadCount.toLocaleString()} 下载</span>
-                  <button
-                    className="btn sm primary"
-                    onClick={async () => {
-                      if (!targetId) return toast('先选实例', 'error')
-                      try {
-                        await api.cfInstall(targetId, hit.id)
-                        toast(`已安装 ${hit.name}`, 'success')
-                      } catch (e) {
-                        toast(`安装失败：${(e as Error).message}`, 'error')
-                      }
-                    }}
-                  >
-                    安装
-                  </button>
+                  {cfType === 'modpack' ? (
+                    <button
+                      className="btn sm"
+                      onClick={() => hit.url && api.openExternal(hit.url)}
+                      title="整合包是一整个实例，下载 zip 后拖进启动器窗口就能导入"
+                    >
+                      打开网页
+                    </button>
+                  ) : (
+                    <button
+                      className="btn sm primary"
+                      onClick={async () => {
+                        if (!targetId) return toast('先选实例', 'error')
+                        try {
+                          await api.cfInstall(targetId, hit.id, cfType as 'mod' | 'resourcepack' | 'shader', hit.name)
+                          toast(`已安装 ${hit.name}`, 'success')
+                        } catch (e) {
+                          toast(`安装失败：${(e as Error).message}`, 'error')
+                        }
+                      }}
+                    >
+                      安装
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

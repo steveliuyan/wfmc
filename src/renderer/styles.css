@@ -561,6 +561,8 @@ nav {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 14px;
+  /* 每张卡片各自高度：默认的 stretch 会让同排的卡片一起被拉高，看着像「一个展开另一个也展开了」 */
+  align-items: start;
 }
 
 .grid-2 {
@@ -3926,6 +3928,12 @@ textarea:focus {
   border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
 }
 
+.set-head-sub {
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px dashed var(--line);
+}
+
 .set-head .set-titles {
   min-width: 0;
 }
@@ -3937,16 +3945,16 @@ textarea:focus {
 }
 
 .set-desc {
-  margin-top: 3px;
+  margin-top: 4px;
   font-size: 12px;
-  line-height: 1.65;
+  line-height: 1.8;
   color: var(--muted);
 }
 
 /* 卡片内的分组块 */
 .set-block + .set-block {
-  margin-top: 16px;
-  padding-top: 16px;
+  margin-top: 20px;
+  padding-top: 18px;
   border-top: 1px dashed var(--line);
 }
 
@@ -3955,7 +3963,7 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text-2);
@@ -3974,7 +3982,7 @@ textarea:focus {
 .set-note {
   margin-top: 10px;
   font-size: 12px;
-  line-height: 1.75;
+  line-height: 1.9;
   color: var(--muted);
 }
 
@@ -3983,6 +3991,7 @@ textarea:focus {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  margin: 12px 0 4px;
 }
 
 .set-actions.top {

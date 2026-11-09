@@ -8,7 +8,8 @@ import type {
   Instance,
   ModMeta,
   RestoreBackupResult,
-  SaveBackup
+  SaveBackup,
+  SaveBackupKind
 } from '../shared/types'
 import { store } from './store'
 import {
@@ -22,7 +23,18 @@ import {
 import { gamePathFor } from './paths'
 import { diagnoseMods } from './moddoctor'
 import { disableResourcePack } from './options'
-import { createBackup, listBackups, pruneBackups, restoreBackup, type SavesBackupResult } from './savebackup'
+import {
+  backupFileName,
+  createBackup,
+  deleteBackup,
+  listBackups,
+  markBackupSynced,
+  pruneBackups,
+  restoreBackup,
+  type SavesBackupResult
+} from './savebackup'
+import * as savescloud from './savescloud'
+import { hasCloudToken } from './cloudsync'
 import {
   createModsBackup,
   listModsBackups,
@@ -245,6 +257,71 @@ export function listContent(instanceId: string, kind: ContentKind): ContentItem[
   return enrich(readFolder(path.join(root, kind)))
 }
 
+/* ------------------------------------------------------------------ *
+ * 大整合包（几百个 mod）的内容管理：先给列表，元数据后台补
+ *
+ * 为什么：readJarMeta 要拆 zip（zip.ts 是整文件读进内存再解压），
+ * 400 个 mod 冷启动一次要好几秒，而且**同步**跑在主进程 —— 界面直接卡死。
+ * 所以 content:list 只返回目录信息（毫秒级），元数据交给
+ * enrichContentChunked 分批算，算一批推一批（event:content-meta）。
+ * ------------------------------------------------------------------ */
+
+/** 元数据缓存键：必须和 readJarMeta 内部用的键一模一样，否则永远命中不了 */
+function jarMetaKey(item: ContentItem): string | undefined {
+  if (item.isDir) return undefined
+  if (!/\.(jar|zip)(\.disabled)?$/i.test(item.name)) return undefined
+  return `${item.path}|${Math.round(item.mtime)}|${item.name.endsWith('.disabled') ? 'd' : 'e'}`
+}
+
+/** 快速列表：只读目录，不碰压缩包（几百个 mod 也是毫秒级） */
+export function listContentQuick(instanceId: string, kind: ContentKind): ContentItem[] {
+  return readFolder(path.join(instanceRoot(instanceId), kind))
+}
+
+export interface ContentMetaPatch {
+  path: string
+  meta: ModMeta
+}
+
+/**
+ * 后台补元数据。每算 chunk 个就让出事件循环一次，算完一批立刻回调，
+ * 主进程不会被一个长时间的同步循环堵住。
+ * 返回「这次真正需要读的条数」（缓存命中的不算）。
+ */
+export async function enrichContentChunked(
+  instanceId: string,
+  kind: ContentKind,
+  onPatch: (patches: ContentMetaPatch[]) => void,
+  opts: { chunk?: number; isCancelled?: () => boolean } = {}
+): Promise<number> {
+  const chunk = Math.max(1, opts.chunk ?? 8)
+  const items = listContentQuick(instanceId, kind)
+  const todo = items.filter((it) => {
+    const key = jarMetaKey(it)
+    return !!key && !metaCache().get(key)
+  })
+  if (todo.length === 0) return 0
+
+  let batch: ContentMetaPatch[] = []
+  for (let i = 0; i < todo.length; i++) {
+    if (opts.isCancelled?.()) break
+    const item = todo[i]
+    const key = jarMetaKey(item)
+    if (!key) continue
+    // readJarMeta 自己会写缓存；这里补上 item 的元数据
+    const meta = readJarMeta(item.path, `${Math.round(item.mtime)}|${item.name.endsWith('.disabled') ? 'd' : 'e'}`)
+    batch.push({ path: item.path, meta })
+    if (batch.length >= chunk) {
+      onPatch(batch)
+      batch = []
+      // 让出一次事件循环：界面 / 其它 IPC 才有机会插进来
+      await new Promise<void>((r) => setImmediate(r))
+    }
+  }
+  if (batch.length > 0) onPatch(batch)
+  return todo.length
+}
+
 /** 启用 / 禁用（改后缀 .disabled） */
 export function toggleContent(instanceId: string, target: string): ContentItem[] {
   const root = instanceRoot(instanceId)
@@ -314,13 +391,187 @@ export function contentDir(instanceId: string, kind: ContentKind): string {
  * 返回的不只是路径 —— 还带上「装了哪几个存档」，界面上要显示出来，
  * 免得用户打完包不知道里面到底有什么。
  */
-export function backupSaves(instanceId: string): SavesBackupResult | undefined {
+export function backupSaves(
+  instanceId: string,
+  opts: { kind?: SaveBackupKind } = {}
+): SavesBackupResult | undefined {
   const root = instanceRoot(instanceId)
   const inst = store.getInstance(instanceId)
-  return createBackup(path.join(root, 'saves'), store.backupsDir, instanceId, new Date(), {
+  const r = createBackup(path.join(root, 'saves'), store.backupsDir, instanceId, new Date(), {
     instanceName: inst?.name,
-    mcVersion: inst?.mcVersion
+    mcVersion: inst?.mcVersion,
+    loader: inst?.loader,
+    loaderVersion: inst?.loaderVersion,
+    kind: opts.kind
   })
+  // 本地成功之后才异步上云：云端失败完全不影响本地这份
+  if (r && cloudSavesReady()) void uploadSaveBackupCloud(instanceId, r.file).catch(() => undefined)
+  return r
+}
+
+/* ------------------------------------------------------------------ 云端存档 */
+
+/** 云端存档能不能用：登录了 + 云备份开关没关 */
+export function cloudSavesReady(): boolean {
+  return store.settings.cloud?.enabled !== false && hasCloudToken()
+}
+
+/** 手动打包的实例信息（上传 meta 用；不含 sha256，网络层自己算） */
+function uploadMetaOf(instanceId: string, worlds: string[], files: number, createdAt: number): savescloud.UploadMeta {
+  const inst = store.getInstance(instanceId)
+  return {
+    instance: instanceId,
+    instanceName: inst?.name,
+    mcVersion: inst?.mcVersion,
+    loader: inst?.loader,
+    loaderVersion: inst?.loaderVersion,
+    worlds,
+    files,
+    createdAt
+  }
+}
+
+/**
+ * 把一份本地快照传上云端。
+ * 传成功后在那份 .zip.json 里记下 cloudId，列表上就能显示「已同步」。
+ */
+export async function uploadSaveBackupCloud(instanceId: string, file?: string): Promise<{ ok: boolean; message: string; id?: string }> {
+  if (!cloudSavesReady()) return { ok: false, message: '还没登录统一账号（或云备份被关掉了），先登录再传' }
+  // 没指定文件就现打一份（直接走 createBackup，别走 backupSaves —— 那条会自动触发上传，成了自己叫自己）
+  let zip = file
+  if (!zip) {
+    const root = instanceRoot(instanceId)
+    const inst = store.getInstance(instanceId)
+    zip = createBackup(path.join(root, 'saves'), store.backupsDir, instanceId, new Date(), {
+      instanceName: inst?.name,
+      mcVersion: inst?.mcVersion,
+      loader: inst?.loader,
+      loaderVersion: inst?.loaderVersion,
+      kind: 'manual'
+    })?.file
+  }
+  if (!zip) return { ok: false, message: '存档目录是空的，没什么可备份' }
+  if (!fs.existsSync(zip)) return { ok: false, message: '这份快照文件不在了' }
+  const stat = fs.statSync(zip)
+  const limitMb = 500
+  if (stat.size > limitMb * 1024 * 1024) {
+    return { ok: false, message: `这份备份 ${(stat.size / 1024 / 1024).toFixed(0)}MB，超过云端单份 ${limitMb}MB 上限` }
+  }
+  const meta = readBackupMetaSafe(zip)
+  const r = await savescloud.upload(
+    zip,
+    uploadMetaOf(instanceId, meta?.worlds ?? [], meta?.files ?? 0, meta?.createdAt ?? Date.now())
+  )
+  markBackupSynced(zip, r.id)
+  return {
+    ok: true,
+    id: r.id,
+    message: r.deduped ? '云端已有完全相同的这份存档，没有重复占用空间' : `已传到云端（${formatMb(r.bytes)}）`
+  }
+}
+
+function readBackupMetaSafe(zip: string) {
+  try {
+    const p = `${zip}.json`
+    return JSON.parse(fs.readFileSync(p, 'utf-8')) as {
+      worlds?: string[]
+      files?: number
+      createdAt?: number
+      instanceName?: string
+      mcVersion?: string
+    }
+  } catch {
+    return undefined
+  }
+}
+
+function formatMb(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${(bytes / 1024).toFixed(0)} KB`
+}
+
+/** 云端存档列表（按实例 / 版本 / 整合包 / 时间排序，界面直接用） */
+export async function listCloudSaveBackups(instanceId?: string): Promise<{
+  items: import('../shared/types').CloudSaveItem[]
+  limits: import('../shared/types').CloudSaveLimits
+}> {
+  const r = await savescloud.list(instanceId)
+  const items = (r.items ?? []).map((it) => ({
+    id: it.id,
+    instance: it.instance,
+    instanceName: it.instance_name,
+    mcVersion: it.mc_version,
+    loader: it.loader,
+    loaderVersion: it.loader_version,
+    worlds: it.worlds ?? [],
+    files: Number(it.files ?? 0),
+    bytes: Number(it.bytes ?? 0),
+    sha256: it.sha256,
+    createdAt: Number(it.created_at ?? 0)
+  }))
+  return {
+    items,
+    limits: {
+      savesKeep: Number(r.limits?.saves_keep ?? 10),
+      maxFileMb: Number(r.limits?.max_file_mb ?? 500),
+      quotaBytes: Number(r.limits?.quota_bytes ?? 2 * 1024 * 1024 * 1024),
+      usedBytes: Number(r.limits?.used_bytes ?? 0)
+    }
+  }
+}
+
+/** 云端用量（“已用 X / 2GB”） */
+export async function cloudSaveUsage() {
+  return savescloud.usage()
+}
+
+/** 删掉云端某一份（幂等） */
+export async function deleteCloudSaveBackup(id: string): Promise<{ ok: boolean; message: string }> {
+  await savescloud.remove(id)
+  return { ok: true, message: '已从云端删掉' }
+}
+
+/**
+ * 从云端恢复：下载 → 校验 sha256 → 落到备份目录（这样它也会出现在本地快照列表里）
+ * → 复用 restoreSaveBackup（回滚前先本地备份 + zip-slip 防护）。
+ */
+export async function restoreCloudSaveBackup(
+  instanceId: string,
+  id: string,
+  label?: string
+): Promise<RestoreBackupResult & { file: string; downloadedBytes: number }> {
+  const inst = store.getInstance(instanceId)
+  if (!inst) throw new Error('实例不存在')
+  const name = backupFileName(instanceId, new Date()).replace(/\.zip$/, `-cloud-${id.slice(-6)}.zip`)
+  const dest = path.join(store.backupsDir, name)
+  const got = await savescloud.download(id, dest)
+  // 补一份说明文件，本地列表里也能看出它是什么、从哪来
+  try {
+    fs.writeFileSync(
+      `${dest}.json`,
+      JSON.stringify(
+        {
+          worlds: [],
+          files: 0,
+          instanceId,
+          instanceName: inst.name,
+          mcVersion: inst.mcVersion,
+          loader: inst.loader,
+          loaderVersion: inst.loaderVersion,
+          createdAt: Date.now(),
+          cloudId: id,
+          cloudAt: Date.now(),
+          note: label
+        },
+        null,
+        2
+      ),
+      'utf-8'
+    )
+  } catch {
+    /* 说明写不上不影响恢复 */
+  }
+  const r = restoreSaveBackup(instanceId, dest, { avoidOverwrite: true })
+  return { ...r, file: dest, downloadedBytes: got.bytes }
 }
 
 /** 备份目录（存档快照都放这儿），打开文件夹用 */
@@ -338,14 +589,23 @@ export function pruneSaveBackups(instanceId: string, keep = 12): number {
   return pruneBackups(store.backupsDir, instanceId, keep)
 }
 
+/** 删掉一份快照（用户在列表里点删除） */
+export function deleteSaveBackup(file: string): boolean {
+  return deleteBackup(store.backupsDir, file)
+}
+
 /**
  * 回滚到某个快照：先把当前存档再打一份「回滚前」的后悔药，再把快照覆盖写回。
  * 覆盖不清空 —— 快照里没有的存档保持原样，不会误删新世界。
  */
-export function restoreSaveBackup(instanceId: string, backupFile: string): RestoreBackupResult {
+export function restoreSaveBackup(
+  instanceId: string,
+  backupFile: string,
+  opts: { avoidOverwrite?: boolean } = {}
+): RestoreBackupResult {
   const root = instanceRoot(instanceId)
-  const safetyBackup = backupSaves(instanceId)?.file
-  const { restored, worlds } = restoreBackup(path.join(root, 'saves'), store.backupsDir, backupFile)
+  const safetyBackup = backupSaves(instanceId, { kind: 'safety' })?.file
+  const { restored, worlds } = restoreBackup(path.join(root, 'saves'), store.backupsDir, backupFile, opts)
   pruneSaveBackups(instanceId)
   return { restored, safetyBackup, worlds }
 }

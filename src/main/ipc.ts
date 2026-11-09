@@ -21,6 +21,8 @@ import {
   saveCloudSettings,
   saveLocalDir,
   saveWebdavSettings,
+  storageKind,
+  storageTarget,
   testCloudConnection,
   testStorage,
   unpairCloudDevice,
@@ -37,7 +39,7 @@ import {
 import { cleanCategory, dataUsage } from './diskusage'
 import { searchLocal } from './search'
 import { store } from './store'
-import { MultiDownloader, registerDownloader, unregisterDownloader, pauseDownload, resumeDownload, cancelDownload, downloaderState } from './fastdl'
+import { MultiDownloader, registerDownloader, unregisterDownloader, pauseDownload, resumeDownload, cancelDownload, downloaderState, downloaderSignal } from './fastdl'
 import { friendlyJavaError, scanJava, installJavaRuntime, requiredJavaMajor } from './java'
 import {
   addLoaderToInstance,
@@ -47,30 +49,47 @@ import {
   listRemoteVersions,
   repairInstance
 } from './minecraft'
-import { createInstance, deleteInstance, deleteVersion, duplicateInstance, instanceDetail, updateInstance } from './instances'
+import {
+  createInstance,
+  deleteInstance,
+  deleteVersion,
+  duplicateInstance,
+  instanceDeleteSize,
+  instanceDetail,
+  updateInstance
+} from './instances'
 import { isRunning, killGame, launchInstance, listInstanceContent } from './launch'
 import { accountHealth, addOfflineAccount, completeMicrosoftLogin, refreshAccount, refreshExpiringAccounts, removeAccount, startMicrosoftLogin } from './accounts'
 import { installResource, listResourceVersions, planInstall, searchResources, type ResourceType } from './modrinth'
+import { searchMirror } from './cnmirror'
 import { installCurseforgeZip, installMrpackFile, installMrpackFromUrl } from './modpack'
 import {
   backupMods,
   backupSaves,
+  cloudSaveUsage,
+  cloudSavesReady,
   contentDir,
+  deleteCloudSaveBackup,
   deleteContent,
+  deleteSaveBackup,
   enableContent,
   exportInstance,
   importContent,
   importInstanceZip,
-  listContent,
+  enrichContentChunked,
+  listCloudSaveBackups,
+  listContentQuick,
   listCrashReports,
   listModsBackupFiles,
   listSaveBackups,
   pruneSaveBackups,
   readCrashReport,
+  restoreCloudSaveBackup,
   restoreModsBackupSnapshot,
   restoreSaveBackup,
   savesBackupDir,
-  toggleContent
+  toggleContent,
+  uploadSaveBackupCloud
 } from './content'
 import { exportDiagnostics, moveResourcePack, readResourcePackOrder, toggleResourcePack } from './content'
 import {
@@ -146,9 +165,9 @@ import { decodeRoomCode, encodeRoomCode } from './rooms'
 import { applyManifestDiff, decodeManifest, diffManifest, encodeManifest, localModsOf, manifestOfInstance } from './roommanifest'
 import { inspectSave, listSaves as listSaveWorlds, patchLevel, snapshotLevel } from './saveedit'
 import { applyPerfPreset, deleteScreenshot, listScreenshots, PERF_PRESETS, screenshotsDir } from './shots'
-import { cancelTask, clearFinishedTasks, listTasks, pauseTask, resumeTask, runTask, setTaskEmitter } from './tasks'
+import { cancelTask, clearFinishedTasks, findTaskIdBySignal, listTasks, pauseTask, resumeTask, runTask, setTaskEmitter } from './tasks'
 import { applyBestUpdate, applyUpdate, checkReleases, checkUpdate, pickAsset } from './updater'
-import { diagnoseMods } from './moddoctor'
+import { diagnoseModsAsync } from './moddoctor'
 import { buildGraph } from './modgraph'
 import { setModsDiagnosisListener, startModWatch, stopModWatch } from './modwatch'
 import { fixMissingDeps } from './moddeps'
@@ -156,7 +175,7 @@ import { installLangPacks, inspectLangPack, readPackContents, removeLangPacks, r
 import { PACK_EXT, inspectWorldPack, packWorld, restoreWorldPack } from './worldpack'
 import { cleanTempFiles, speedTest } from './speedtest'
 import { importTracks, listTracks, musicDir, removeTrack } from './music'
-import { installCurseforgeMod, searchCurseforge, testCurseforgeKey } from './curseforge'
+import { installCurseforgeMod, searchCurseforge, testCurseforgeKey, type CfContentType } from './curseforge'
 import {
   buildManifest,
   compareEnvironment,
@@ -289,6 +308,9 @@ export function registerIpc() {
   })
   // 找回旧数据：把机器上所有存过数据的目录列出来（老名字的、便携版的、安装版的）
   ipcMain.handle('data:discover', () => store.discoverData())
+  // 固定位置都没找到时，再往别的盘里扫（F:\data 这种）
+  ipcMain.handle('data:scan-drives', () => store.scanDrivesForData())
+  ipcMain.handle('data:inspect-dir', (_e, dir: string) => store.inspectDataDir(dir))
   ipcMain.handle('data:adopt', (_e, dir: string) => store.adoptDir(dir))
   // 启动时自动接上了旧数据 → 首页提示一句，把「数据没丢」讲清楚
   ipcMain.handle('data:adopt-info', () => store.adoptInfo())
@@ -386,7 +408,13 @@ ipcMain.handle('data:size', () => store.dataSize())
   ipcMain.handle('version:loaders', async (_e, loader: string, mcVersion: string) =>
     await listLoaderVersions(loader as never, mcVersion)
   )
-  ipcMain.handle('version:delete', (_e, instanceId: string, versionId: string) => deleteVersion(instanceId, versionId))
+  ipcMain.handle('version:delete', async (_e, instanceId: string, versionId: string) => {
+    const dir = versionId
+    return runTask('misc', `删除版本 ${dir}`, async (ctx) => {
+      ctx.report({ phase: '删除版本目录…', current: 0, total: 1 })
+      return deleteVersion(instanceId, versionId)
+    })
+  })
 
   // ---------- 实例 ----------
   ipcMain.handle('instance:list', () => store.listInstances())
@@ -395,12 +423,40 @@ ipcMain.handle('data:size', () => store.dataSize())
   ipcMain.handle('instance:detail', (_e, id: string) => instanceDetail(id))
   ipcMain.handle('instance:create', (_e, input: Parameters<typeof createInstance>[0]) => createInstance(input))
   ipcMain.handle('instance:update', (_e, id: string, patch: Partial<Instance>) => updateInstance(id, patch))
-  ipcMain.handle('instance:delete', (_e, id: string, removeFiles: boolean) => {
+  // 删之前先量一下：界面能在确认框里说清「要删多少文件 / 多大」
+  ipcMain.handle('instance:delete-size', (_e, id: string) => instanceDeleteSize(id))
+  ipcMain.handle('instance:delete', async (_e, id: string, removeFiles: boolean) => {
     killGame(id)
-    deleteInstance(id, removeFiles)
+    if (!removeFiles) return deleteInstance(id, false)
+    const name = store.getInstance(id)?.name ?? '实例'
+    // 包成后台任务，右下角任务面板就有进度条（大整合包几 GB，不报进度像卡死）
+    await runTask('misc', `删除实例 ${name}`, async (ctx) => {
+      ctx.report({ phase: '统计文件…', current: 0, total: 1 })
+      deleteInstance(id, true, (p) => {
+        ctx.report({
+          phase: `删除文件 ${p.current}/${p.total}`,
+          current: p.current,
+          total: p.total,
+          detail: p.detail
+        })
+      })
+    })
   })
-  ipcMain.handle('instance:duplicate', (_e, id: string, name?: string) => duplicateInstance(id, name))
-  ipcMain.handle('instance:export', (_e, id: string) => exportInstance(id))
+  // 复制 / 导出都要拷几个 GB，包成任务才有进度可看
+  ipcMain.handle('instance:duplicate', async (_e, id: string, name?: string) => {
+    const inst = store.getInstance(id)
+    return runTask('misc', `复制实例 ${inst?.name ?? id}`, async (ctx) => {
+      ctx.report({ phase: '复制游戏文件…', current: 0, total: 1 })
+      return duplicateInstance(id, name)
+    })
+  })
+  ipcMain.handle('instance:export', async (_e, id: string) => {
+    const inst = store.getInstance(id)
+    return runTask('misc', `导出实例 ${inst?.name ?? id}`, async (ctx) => {
+      ctx.report({ phase: '打包游戏文件…', current: 0, total: 1 })
+      return exportInstance(id)
+    })
+  })
   ipcMain.handle('instance:content', (_e, id: string) => listInstanceContent(id))
   // 给已有实例补装加载器（内容管理提示「先去实例装 Fabric / Forge」点了就能直达这里）
   ipcMain.handle('instance:install-loader', async (_e, id: string, loader: string, loaderVersion: string) => {
@@ -435,7 +491,20 @@ ipcMain.handle('data:size', () => store.dataSize())
   })
 
   // ---------- 内容管理（模组/资源包/光影/存档） ----------
-  ipcMain.handle('content:list', (_e, instanceId: string, kind: ContentKind) => listContent(instanceId, kind))
+  // 列表分两步：先给目录（毫秒级），元数据由 content:enrich 后台补、一批推一条事件。
+  // 大整合包（几百个 mod）以前是一次同步 enrich 全部拆包，主进程卡死几秒 —— 别再改回去。
+  ipcMain.handle('content:list', (_e, instanceId: string, kind: ContentKind) => listContentQuick(instanceId, kind))
+
+  let enrichToken = 0
+  ipcMain.handle('content:enrich', async (_e, instanceId: string, kind: ContentKind) => {
+    const token = ++enrichToken
+    return enrichContentChunked(
+      instanceId,
+      kind,
+      (patches) => emit('event:content-meta', { instanceId, kind, patches }),
+      { isCancelled: () => token !== enrichToken }
+    )
+  })
   ipcMain.handle('content:toggle', (_e, instanceId: string, target: string) => toggleContent(instanceId, target))
   // 体检里「前置被禁用了」的一键修复：把 .disabled 去掉，不重新下载
   ipcMain.handle('content:enable', (_e, instanceId: string, kind: ContentKind, names: string[]) =>
@@ -450,7 +519,7 @@ ipcMain.handle('data:size', () => store.dataSize())
   ipcMain.handle('content:open', async (_e, instanceId: string, kind: ContentKind) => {
     await shell.openPath(contentDir(instanceId, kind))
   })
-  ipcMain.handle('saves:backup', (_e, instanceId: string) => backupSaves(instanceId))
+  ipcMain.handle('saves:backup', (_e, instanceId: string) => backupSaves(instanceId, { kind: 'manual' }))
   // 在资源管理器里选中某个快照 zip；路径必须落在备份目录里，别让它乱开
   ipcMain.handle('saves:reveal-backup', async (_e, file: string) => {
     const dir = path.resolve(savesBackupDir())
@@ -465,7 +534,19 @@ ipcMain.handle('data:size', () => store.dataSize())
     await shell.openPath(dir)
   })
   ipcMain.handle('saves:backups', (_e, instanceId: string) => listSaveBackups(instanceId))
+  ipcMain.handle('saves:delete-backup', (_e, file: string) => deleteSaveBackup(file))
   ipcMain.handle('saves:restore-backup', (_e, instanceId: string, file: string) => restoreSaveBackup(instanceId, file))
+  // ---- 云端存档备份（/v1/saves/*）：本地备份永远先做，云端只是多一份
+  ipcMain.handle('saves:cloud-ready', () => cloudSavesReady())
+  ipcMain.handle('saves:cloud-upload', (_e, instanceId: string, file?: string) =>
+    uploadSaveBackupCloud(instanceId, file)
+  )
+  ipcMain.handle('saves:cloud-list', (_e, instanceId?: string) => listCloudSaveBackups(instanceId))
+  ipcMain.handle('saves:cloud-usage', () => cloudSaveUsage())
+  ipcMain.handle('saves:cloud-delete', (_e, id: string) => deleteCloudSaveBackup(id))
+  ipcMain.handle('saves:cloud-restore', (_e, instanceId: string, id: string, label?: string) =>
+    restoreCloudSaveBackup(instanceId, id, label)
+  )
   // mods 快照：折腾模组前的后悔药（更新前会自动打一份，也可以手动打）
   ipcMain.handle('mods:backup', (_e, instanceId: string) => backupMods(instanceId))
   ipcMain.handle('mods:backups', (_e, instanceId: string) => listModsBackupFiles(instanceId))
@@ -628,6 +709,10 @@ ipcMain.handle('data:size', () => store.dataSize())
     await searchResources(params)
   )
   ipcMain.handle('resource:versions', async (_e, projectId: string, opts) => await listResourceVersions(projectId, opts))
+  // 国内站（BBSMC / XyeBBS）：只做中文搜索，文件点了去浏览器下（验证码 / 网盘挡着，装不了）
+  ipcMain.handle('resource:mirror-search', async (_e, params: Parameters<typeof searchMirror>[0]) =>
+    await searchMirror(params)
+  )
   // 装之前算清单：主文件 + 必需前置 + 可选 + 冲突
   ipcMain.handle(
     'resource:plan',
@@ -713,16 +798,33 @@ ipcMain.handle('data:size', () => store.dataSize())
 
   // ---------- CurseForge ----------
   ipcMain.handle('cf:test-key', async (_e, key: string) => await testCurseforgeKey(key))
-  ipcMain.handle('cf:search', async (_e, input: { query: string; mcVersion?: string; loader?: string }) =>
-    await searchCurseforge(input)
+  ipcMain.handle(
+    'cf:search',
+    async (_e, input: { query: string; mcVersion?: string; loader?: string; type?: CfContentType }) =>
+      await searchCurseforge(input)
   )
-  ipcMain.handle('cf:install', async (_e, instanceId: string, modId: number) =>
-    await runTask('resource', `安装 CF 模组 #${modId}`, async (ctx) =>
-      installCurseforgeMod(instanceId, modId, (p) => {
-        progress({ ...p, taskId: ctx.id })
-        ctx.report({ phase: p.phase, current: p.current, total: p.total })
-      })
-    )
+  ipcMain.handle(
+    'cf:install',
+    async (
+      _e,
+      instanceId: string,
+      modId: number,
+      type: 'mod' | 'resourcepack' | 'shader' = 'mod',
+      title?: string
+    ) =>
+      await runTask('resource', `安装 CF ${{ mod: '模组', resourcepack: '资源包', shader: '光影' }[type]} ${
+        title ?? '#' + modId
+      }`, async (ctx) =>
+        installCurseforgeMod(
+          instanceId,
+          modId,
+          (p) => {
+            progress({ ...p, taskId: ctx.id })
+            ctx.report({ phase: p.phase, current: p.current, total: p.total })
+          },
+          type
+        )
+      )
   )
 
   // ---------- 音乐播放器 ----------
@@ -883,6 +985,21 @@ ipcMain.handle('data:size', () => store.dataSize())
     return r.filePaths[0]
   })
   ipcMain.handle('cloud:storage-test', () => testStorage())
+  /** 打开备份所在文件夹（用户报过：只显示路径、点不开）。目录不存在就先建出来 */
+  ipcMain.handle('cloud:open-dir', async () => {
+    const kind = storageKind()
+    if (kind !== 'local') {
+      return { ok: false, message: '只有「本地文件夹」能直接打开；WebDAV 在网盘客户端里看' }
+    }
+    const dir = storageTarget('local')
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+    } catch (e) {
+      return { ok: false, message: `目录建不出来：${(e as Error).message}` }
+    }
+    const err = await shell.openPath(dir)
+    return err ? { ok: false, message: err } : { ok: true, message: dir }
+  })
   ipcMain.handle('cloud:migrate', (_e, from?: StorageKind) => migrateBackups(from))
 
   // ---------- 统一账号（浏览器登录 api.20050905.xyz，见 cloudlogin.ts） ----------
@@ -928,7 +1045,7 @@ ipcMain.handle('data:size', () => store.dataSize())
   ipcMain.handle('account:devices', () => [])
   ipcMain.handle('account:change-password', () => ({
     ok: false,
-    message: '改密码请到网页上改：https://api.20050905.xyz/account'
+    message: '改密码请到网页上改：https://api.20050905.xyz/account?product=wfmc'
   }))
   ipcMain.handle('account:2fa-setup', () => ({ ok: false, message: '两步验证在网页上设置' }))
   ipcMain.handle('account:2fa-enable', () => ({ ok: false, message: '两步验证在网页上设置' }))
@@ -960,20 +1077,10 @@ ipcMain.handle('data:size', () => store.dataSize())
     } catch {
       fileSize = 0
     }
-    const meter = { bytes: 0, last: Date.now(), at: 0, speed: 0 }
-    const fmtSpeed = () => (meter.speed / 1024 / 1024).toFixed(2) + ' MB/s'
+    // 速度不在这里算：渲染层已经按字节差算了实时 ↓ 速度，两处都显示会打架
     const dl = new MultiDownloader({
       threads: store.settings.downloadThreads ?? 32,
-      chunks: 8,
-      onBytes: (d: number) => {
-        meter.bytes += d
-        const now = Date.now()
-        if (now - meter.last >= 700) {
-          meter.speed = ((meter.bytes - meter.at) * 1000) / (now - meter.last)
-          meter.at = meter.bytes
-          meter.last = now
-        }
-      }
+      chunks: 8
     })
     registerDownloader(key, dl)
     void (async () => {
@@ -1002,9 +1109,7 @@ ipcMain.handle('data:size', () => store.dataSize())
               '（' +
               (dl.downloaded / 1024 / 1024).toFixed(1) +
               (fileSize ? ' / ' + (fileSize / 1024 / 1024).toFixed(1) : '') +
-              ' MB · ' +
-              fmtSpeed() +
-              '）',
+              ' MB）',
             current: dl.downloaded,
             total: fileSize || dl.downloaded || 1,
             bytes: dl.downloaded,
@@ -1022,9 +1127,7 @@ ipcMain.handle('data:size', () => store.dataSize())
                 '（' +
                 (dl.downloaded / 1024 / 1024).toFixed(1) +
                 (fileSize ? ' / ' + (fileSize / 1024 / 1024).toFixed(1) : '') +
-                ' MB · ' +
-                fmtSpeed() +
-                '）',
+                ' MB）',
               current: dl.downloaded,
               total: fileSize || 0
             })
@@ -1048,11 +1151,27 @@ ipcMain.handle('data:size', () => store.dataSize())
     })()
     return { key, dest, name }
   })
-  ipcMain.handle('dl:pause', (_e, key: string) => pauseDownload(key))
-  ipcMain.handle('dl:resume', (_e, key: string) => resumeDownload(key))
+  ipcMain.handle('dl:pause', (_e, key: string) => {
+    const ok = pauseDownload(key)
+    // 同一个下载器可能挂在某个安装任务上：任务树里也标成"已暂停"，别一边显示暂停一边显示运行中
+    if (ok) {
+      const id = findTaskIdBySignal(downloaderSignal(key))
+      if (id) pauseTask(id)
+    }
+    return ok
+  })
+  ipcMain.handle('dl:resume', (_e, key: string) => {
+    // 先恢复任务状态（它会把闸门放开），再放下载器，顺序反了会出现"显示在跑但没数据"
+    const id = findTaskIdBySignal(downloaderSignal(key))
+    if (id) resumeTask(id)
+    return resumeDownload(key)
+  })
   ipcMain.handle('dl:cancel', (_e, key: string) => {
-    const ok = cancelDownload(key)
-    // 补一条完成的进度（done），界面才会真的把这张卡片收掉
+    // 挂在任务上的：整个任务一起取消（信号 abort 后安装流程会抛 AbortError 收尾，不会变成"任务失败"）
+    const id = findTaskIdBySignal(downloaderSignal(key))
+    const ok = id ? cancelTask(id) : cancelDownload(key)
+    // 取消要立刻把半截文件删掉，卡片也要收掉
+    cancelDownload(key)
     if (ok) progress({ key, phase: '已取消', current: 1, total: 1, done: true })
     return ok
   })
@@ -1088,7 +1207,9 @@ ipcMain.handle('data:size', () => store.dataSize())
   ipcMain.handle('app:version', () => app.getVersion())
 
   // ---------- Mod 体检 / 整合包导出 ----------
-  ipcMain.handle('mods:diagnose', (_e, instanceId: string) => diagnoseMods(instanceId))
+  ipcMain.handle('mods:diagnose', (_e, instanceId: string) =>
+    diagnoseModsAsync(instanceId, (done, total) => emit('event:mods-diagnose-progress', { instanceId, done, total }))
+  )
   // 依赖图：谁依赖谁 / 谁和谁冲突 / 缺了哪个前置
   ipcMain.handle('mods:graph', (_e, instanceId: string) => buildGraph(instanceId))
   // 体检常驻：盯着这个实例的 mods 目录，变了就在后台重跑并推送

@@ -225,6 +225,8 @@ export default function Instances() {
   // 卡片里的折叠面板：一次只开一个，收起/展开都有动画
   const [openPanel, setOpenPanel] = useState<{ id: string; key: PanelKey }>()
   const [visiblePanel, setVisiblePanel] = useState<{ id: string; key: PanelKey }>()
+  // 正在删的实例（按钮显示「删除中…」；真正的进度条在右下角任务面板）
+  const [deleting, setDeleting] = useState('')
 
   const togglePanel = (id: string, key: PanelKey) => {
     const isOpen = openPanel?.id === id && openPanel.key === key
@@ -471,14 +473,37 @@ export default function Instances() {
                 </button>
                 <button
                   className="btn sm danger"
+                  disabled={deleting === i.id}
                   onClick={async () => {
-                    if (!(await askConfirm({ title: '删除实例', message: `「${i.name}」会连同游戏文件一起删除，确定？`, okText: '删除', danger: true }))) return
-                    await api.deleteInstance(i.id, true)
-                    await refreshInstances()
-                    toast('实例已删除', 'success')
+                    if (deleting === i.id) return
+                    // 先量一下：告诉用户到底要删多少，别只丢一句「确定？」
+                    const size = await api.instanceDeleteSize(i.id).catch(() => ({ files: 0, bytes: 0 }))
+                    const what =
+                      size.files > 0
+                        ? `${size.files.toLocaleString('zh-CN')} 个文件、约 ${formatSize(size.bytes)}`
+                        : '游戏文件'
+                    if (
+                      !(await askConfirm({
+                        title: '删除实例',
+                        message: `「${i.name}」会连同游戏文件一起删除（${what}），删掉就找不回来了，确定？`,
+                        okText: '删除',
+                        danger: true
+                      }))
+                    )
+                      return
+                    setDeleting(i.id)
+                    try {
+                      await api.deleteInstance(i.id, true)
+                      await refreshInstances()
+                      toast('实例已删除', 'success')
+                    } catch (e) {
+                      toast(`删除失败：${friendlyError(e)}`, 'error')
+                    } finally {
+                      setDeleting('')
+                    }
                   }}
                 >
-                  删除
+                  {deleting === i.id ? '删除中…' : '删除'}
                 </button>
               </div>
 

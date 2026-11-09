@@ -130,7 +130,7 @@ export async function launchInstance(
       const savesDir = path.join(gameDir, 'saves')
       const hasSaves = fs.existsSync(savesDir) && fs.readdirSync(savesDir).length > 0
       if (hasSaves) {
-        const bk = backupSaves(instance.id)
+        const bk = backupSaves(instance.id, { kind: 'launch' })
         if (bk) {
           pruneSaveBackups(instance.id)
           onLog(

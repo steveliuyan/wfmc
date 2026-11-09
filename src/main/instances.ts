@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import type { Instance, LoaderType } from '../shared/types'
 import { store } from './store'
 import { listLocalVersions } from './minecraft'
+import { measureTree, removeTreeWithProgress, type RemoveProgress } from './fsdel'
 
 export interface CreateInstanceInput {
   name: string
@@ -55,14 +56,27 @@ export function updateInstance(id: string, patch: Partial<Instance>): Instance {
   return updated
 }
 
-export function deleteInstance(id: string, removeFiles: boolean) {
+export function deleteInstance(
+  id: string,
+  removeFiles: boolean,
+  onProgress?: (p: RemoveProgress) => void
+) {
   const dir = store.instanceDir(id)
   if (!fs.existsSync(dir)) return
   if (removeFiles) {
-    fs.rmSync(dir, { recursive: true, force: true })
+    // 带进度删：整合包实例动辄几 GB / 几万个小文件，静默 rmSync 看着像卡死
+    removeTreeWithProgress(dir, onProgress)
   } else {
     fs.rmSync(store.instanceFile(id), { force: true })
   }
+}
+
+/** 删之前先量一下，界面能提前说「要删 X 个文件 / Y GB」 */
+export function instanceDeleteSize(id: string): { files: number; bytes: number } {
+  const dir = store.instanceDir(id)
+  if (!fs.existsSync(dir)) return { files: 0, bytes: 0 }
+  const m = measureTree(dir)
+  return { files: m.files, bytes: m.bytes }
 }
 
 /** 复制实例（含游戏文件），用于开新档 */
@@ -95,7 +109,7 @@ export function deleteVersion(instanceId: string, versionId: string): string[] {
   const gameDir = store.instanceGameDir(instanceId)
   const dir = path.join(gameDir, 'versions', versionId)
   if (!fs.existsSync(dir)) throw new Error('版本不存在')
-  fs.rmSync(dir, { recursive: true, force: true })
+  removeTreeWithProgress(dir)
   const instance = store.getInstance(instanceId)
   if (instance && instance.versionId === versionId && versionId !== instance.mcVersion) {
     store.saveInstance({ ...instance, versionId: instance.mcVersion })

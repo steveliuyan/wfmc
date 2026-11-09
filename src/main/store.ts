@@ -319,6 +319,13 @@ class Store {
 
   setAccounts(accounts: Account[]) {
     this._accounts = accounts
+    // 当前选中的账号被删/被覆盖掉时别留一个悬空 id，否则界面上「当前账号」是空的
+    const active = this._settings.activeAccountId
+    if (active && !accounts.some((a) => a.id === active)) {
+      this._settings.activeAccountId =
+        accounts.find((a) => a.type === 'microsoft')?.id ?? accounts[0]?.id ?? ''
+      writeJson(this.settingsFile, this._settings)
+    }
     // 落盘时加密令牌
     const onDisk = accounts.map((a) => ({
       ...a,
@@ -358,6 +365,87 @@ class Store {
         active: path.resolve(dir) === active
       }))
       .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+  }
+
+  /** 看某个目录像不像一份启动器数据（用户手动挑目录时用） */
+  inspectDataDir(dir: string) {
+    const abs = path.resolve(dir)
+    return {
+      dir: abs,
+      name: path.basename(abs) || abs,
+      instances: countInstances(abs),
+      accounts: readAccountList(abs).length,
+      score: dataScore(abs),
+      active: abs === path.resolve(this.dataDir)
+    }
+  }
+
+  /**
+   * 全盘扫一遍「别的盘里还有没有数据」。
+   * discoverData() 只认固定位置（%APPDATA%、exe 旁边、老名字）；
+   * 用户把数据放过别的盘（比如 F:\data），就只能靠扫。
+   * 只往下两层（盘符根的子目录 → 再一层），命中 instances/ 或 accounts.json 才算数；
+   * 系统目录 / 依赖目录直接跳过，免得扫 Windows 扫到天荒地老。
+   */
+  async scanDrivesForData(): Promise<
+    { dir: string; name: string; instances: number; accounts: number; score: number; active: boolean }[]
+  > {
+    const skip = new Set([
+      'windows', 'program files', 'program files (x86)', 'programdata', '$recycle.bin',
+      'system volume information', 'recovery', 'perflogs', 'msocache', 'config.msi',
+      '$windows.~bt', '$windows.~ws', 'node_modules', '.git', 'appdata', 'onedrivetemp'
+    ])
+    const found: string[] = []
+    const seen = new Set<string>()
+    const hit = (dir: string) => {
+      const abs = path.resolve(dir)
+      if (seen.has(abs)) return
+      seen.add(abs)
+      // 只认「像启动器数据」的目录：有 instances 或者有 accounts.json
+      if (!fs.existsSync(path.join(abs, 'instances')) && !fs.existsSync(path.join(abs, 'accounts.json'))) return
+      if (dataScore(abs) <= 0) return
+      found.push(abs)
+    }
+    const subdirs = (dir: string): string[] => {
+      try {
+        return fs
+          .readdirSync(dir, { withFileTypes: true })
+          .filter((e) => e.isDirectory() && !e.name.startsWith('.') && !skip.has(e.name.toLowerCase()))
+          .map((e) => path.join(dir, e.name))
+      } catch {
+        return []
+      }
+    }
+    const drives = 'CDEFGHIJKLMNOPQRSTUVWXYZ'
+      .split('')
+      .map((d) => `${d}:\\`)
+      .filter((r) => {
+        try {
+          return fs.existsSync(r)
+        } catch {
+          return false
+        }
+      })
+    for (const root of drives) {
+      hit(root)
+      for (const d1 of subdirs(root)) {
+        hit(d1)
+        for (const d2 of subdirs(d1)) hit(d2)
+      }
+      // 一个盘扫完让出一次事件循环：界面不卡，任务列表也还能刷
+      await new Promise<void>((r) => setImmediate(r))
+    }
+    const active = path.resolve(this.dataDir)
+    return found
+      .map((dir) => ({
+        dir,
+        name: path.basename(dir) || dir,
+        instances: countInstances(dir),
+        accounts: readAccountList(dir).length,
+        score: dataScore(dir),
+        active: path.resolve(dir) === active
+      }))
       .sort((a, b) => b.score - a.score)
   }
 

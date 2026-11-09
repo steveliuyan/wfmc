@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useRef } from 'react'
 import { api } from '../api'
 import type { NotifyItem } from '../../shared/types'
 
@@ -20,6 +20,17 @@ export default function Notify({
   onRefresh: () => void
 }) {
   const unread = items.filter((n) => !isRead(n)).length
+
+  // 进页面就自己拉一次：通知是服务端发的，别人刚发的公告不该让用户先去点「刷新」才看得到
+  const pulled = useRef(false)
+  const refreshRef = useRef(onRefresh)
+  refreshRef.current = onRefresh
+  useEffect(() => {
+    if (pulled.current) return
+    pulled.current = true
+    refreshRef.current()
+  }, [])
+
   return (
     <div className="page">
       <header className="page-head">

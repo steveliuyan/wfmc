@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { api, friendlyError, progressPercent, progressText } from '../api'
 import { useLauncher } from '../store'
 import SourcePicker from './SourcePicker'
+import CnMirror from './CnMirror'
 import Select from './Select'
 import { SkeletonCards } from './Skeleton'
 import type { ResourceHit, ResourceVersion } from '../../shared/types'
@@ -38,6 +39,8 @@ export default function ModpackSearch({ goto }: { goto?: (p: 'instances') => voi
   const [versionAll, setVersionAll] = useState<Record<string, boolean>>({})
   const [versionBusy, setVersionBusy] = useState('')
   const [installingVer, setInstallingVer] = useState('')
+  // Modrinth（能一键装）还是国内站（BBSMC / XyeBBS，只能跳浏览器下）
+  const [cnOnly, setCnOnly] = useState(false)
 
   const doSearch = async (attempt = 0, _a?: number, offsetOverride?: number, queryOverride?: string) => {
     setSearching(true)
@@ -142,7 +145,7 @@ export default function ModpackSearch({ goto }: { goto?: (p: 'instances') => voi
   }
 
   const importLocalPack = async () => {
-    const file = await api.pickFile()
+    const file = await api.pickFile([{ name: '整合包', extensions: ['mrpack', 'zip'] }])
     if (!file) return
     try {
       toast('正在导入本地整合包…')
@@ -177,6 +180,36 @@ export default function ModpackSearch({ goto }: { goto?: (p: 'instances') => voi
       <div className="card">
         <div className="row-between" style={{ border: 'none' }}>
           <h3 style={{ margin: 0 }}>整合包</h3>
+          <div className="row" style={{ gap: 6 }}>
+            <button className={`chip ${!cnOnly ? 'on' : ''}`} onClick={() => setCnOnly(false)}>
+              Modrinth（可一键装）
+            </button>
+            <button className={`chip ${cnOnly ? 'on' : ''}`} onClick={() => setCnOnly(true)}>
+              国内站（浏览器下载）
+            </button>
+          </div>
+        </div>
+        <p className="muted small" style={{ marginTop: 4, marginBottom: 0 }}>
+          Modrinth 上的整合包能一键装成新实例；国内站（BBSMC / XyeBBS）只能搜到后打开网页手动下（有验证码 / 网盘挡住）。
+        </p>
+        {cnOnly && (
+          <div className="row wrap" style={{ marginTop: 8, alignItems: 'center' }}>
+            <button className="btn primary sm" onClick={importLocalPack}>
+              导入本地整合包（.mrpack / .zip）
+            </button>
+            <span className="muted small">
+              国内站下回来的 zip 不用找按钮，直接拖进窗口任意位置就行（.mrpack / CurseForge zip / 实例包都能认）
+            </span>
+          </div>
+        )}
+      </div>
+
+      {cnOnly && <CnMirror kind="modpack" mcVersion={mcVersion} loader={loaderFilter} />}
+
+      {!cnOnly && (<>
+      <div className="card">
+        <div className="row-between" style={{ border: 'none' }}>
+          <h3 style={{ margin: 0 }}>在线整合包</h3>
           <SourcePicker compact />
         </div>
         <div className="row" data-tour="mp-search">
@@ -383,6 +416,7 @@ export default function ModpackSearch({ goto }: { goto?: (p: 'instances') => voi
           </span>
         </div>
       )}
+      </>)}
     </>
   )
 }

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * manage 区域的补充对照表（自动扫描出来的漏翻文案，人工补翻的）。
  * 格式：[中文原文, English]，原文必须和源码里的字面量完全一致（运行时按 trim 后的整段匹配）。
  */
@@ -122,6 +122,7 @@ export const PAIRS: [string, string][] = [
   ],
   ['立即备份', 'Back up now'],
   ['打开备份文件夹', 'Open backup folder'],
+  ['打开备份所在文件夹', 'Open backup folder'],
   ['收起', 'Collapse'],
   ['还没有快照。启动一次游戏就会自动生成，或者点「立即备份」。', 'No snapshots yet. One is created on the next launch, or click Back up now'],
   ['回滚存档', 'Roll back saves'],
@@ -184,5 +185,22 @@ export const PAIRS: [string, string][] = [
   ['Modrinth 上没找到对应项目', 'No matching project found on Modrinth'],
   ['已备份：', 'Backed up: '],
   ['备份失败：', 'Backup failed: '],
-  ['回滚失败：', 'Roll back failed: ']
+  ['回滚失败：', 'Roll back failed: '],
+
+  // 云端存档备份（/v1/saves/*）
+  ['这份已经同步到云端', 'Synced to cloud'],
+  ['上传失败：', 'Upload failed: '],
+  ['传这份到云端', 'Upload this one'],
+  ['已用 ${formatSize(cloudUsage.usedBytes)} / ${formatSize(cloudUsage.quotaBytes)}，共 ${cloudUsage.count} 份 · 每个实例云端最多留 ${cloudLimits?.savesKeep ?? 10} 份', 'Used ${formatSize(cloudUsage.usedBytes)} / ${formatSize(cloudUsage.quotaBytes)}, ${cloudUsage.count} save(s) · up to ${cloudLimits?.savesKeep ?? 10} per instance'],
+  ['读云端清单中…', 'Reading cloud list…'],
+  ['打一份新的传上云', 'Back up now and upload'],
+  ['未知版本', 'Unknown version'],
+  ['从云端回滚', 'Restore from cloud'],
+  ['把这份云端存档下载下来并覆盖本地存档？下载后会先校验，回滚前也会先本地备份一份。', 'Download this cloud save and overwrite local saves? It is verified after download, and local saves are backed up first.'],
+  ['下载并回滚', 'Download and restore'],
+  ['回滚前的存档也留了一份', 'A backup of your saves before restoring was kept'],
+  ['删除云端存档', 'Delete cloud save'],
+  ['从云端删掉这份存档？本地的那份不受影响。', 'Delete this save from the cloud? The local copy is untouched.'],
+  ['已从云端删掉', 'Deleted from cloud'],
+  ['删除失败：', 'Delete failed: ']
 ]

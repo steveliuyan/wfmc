@@ -276,6 +276,8 @@ export interface Account {
   expiresAt?: number
   /** 外置登录（authlib-injector）的 API 根地址，例如 https://littleskin.cn/api/yggdrasil */
   server?: string
+  /** 正版登录时用的微软 client id（内置的或设置里自填的），续期必须用同一个，否则 invalid_grant */
+  clientId?: string
 }
 
 export interface GameResolution {
@@ -356,6 +358,38 @@ export interface ResourceHit {
   versions: string[]
   projectType: string
   pageUrl: string
+}
+
+/** 国内资源站：BBSMC（bbsmc.net）与 XyeBBS（xyebbs.com）。
+ *  两家的文件都被验证码墙 / 网盘挡着，不能自动装，只能「搜到 → 打开网页下载」。 */
+export type MirrorSite = 'bbsmc' | 'xyebbs'
+
+/** 国内站搜索命中的一条（字段刻意和 ResourceHit 对齐，卡片好复用） */
+export interface MirrorHit {
+  site: MirrorSite
+  id: string
+  title: string
+  description: string
+  author: string
+  downloads: number
+  iconUrl: string
+  categories: string[]
+  versions: string[]
+  /** 详情页（bbsmc.net/{type}/{slug} 或 xyebbs.com/resources/{id}） */
+  pageUrl: string
+  /** 下载页（XyeBBS 有独立 downloads 页；BBSMC 没有，留空） */
+  downloadUrl?: string
+  /** 一句提醒，比如「文件在夸克网盘」 */
+  note?: string
+}
+
+export interface MirrorSearchResult {
+  hits: MirrorHit[]
+  total: number
+  page: number
+  hasMore: boolean
+  /** 站点给的提示（比如 XyeBBS 不支持按 MC 版本筛选） */
+  hint?: string
 }
 
 export interface ResourceFile {
@@ -554,6 +588,9 @@ export interface SavesBackupResult {
   instanceId: string
   instanceName?: string
   mcVersion?: string
+  /** 加载器（fabric / forge / neoforge / quilt / vanilla）—— 云端按它区分整合包 */
+  loader?: string
+  loaderVersion?: string
 }
 
 /** 一份存档快照（备份目录里的 zip） */
@@ -571,6 +608,56 @@ export interface SaveBackup {
   /** 属于哪个实例 */
   instanceName?: string
   mcVersion?: string
+  /** 已经传上云端的记录 id；没传过就是 undefined */
+  cloudId?: string
+  /** 上次上传成功的时间（毫秒） */
+  cloudAt?: number
+  /** 这份快照怎么来的：启动前自动 / 手动打 / 回滚前的保护备份 / 从云端拉下来 */
+  kind?: SaveBackupKind
+}
+
+/** 快照的来由 */
+export type SaveBackupKind = 'launch' | 'manual' | 'safety' | 'cloud'
+
+/** 云端的存档备份（服务端 /v1/saves 的一条） */
+export interface CloudSaveItem {
+  id: string
+  /** 实例 ID（客户端生成、稳定不变） */
+  instance: string
+  instanceName?: string
+  mcVersion?: string
+  loader?: string
+  loaderVersion?: string
+  worlds: string[]
+  files: number
+  bytes: number
+  sha256?: string
+  /** 服务端入库时间（epoch 秒） */
+  createdAt: number
+}
+
+export interface CloudSaveLimits {
+  savesKeep: number
+  maxFileMb: number
+  quotaBytes: number
+  usedBytes: number
+}
+
+/** 云端存档用量（“已用 X / 2GB”） */
+export interface CloudSaveUsage {
+  usedBytes: number
+  quotaBytes: number
+  count: number
+  instances: number
+}
+
+/** 上传/删除云端存档的结果（message 直接给用户看） */
+export interface CloudSaveResult {
+  ok: boolean
+  message: string
+  id?: string
+  bytes?: number
+  deduped?: boolean
 }
 
 /** 回滚结果 */

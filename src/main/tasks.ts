@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { AbortError } from './net'
 import { createGate, setPaused, waitIfPaused } from './pause'
+import { setDownloadersPausedBySignal } from './fastdl'
 
 export type TaskKind = 'install' | 'modpack' | 'resource' | 'server' | 'java' | 'update' | 'mods' | 'misc'
 export type TaskStatus = 'running' | 'paused' | 'done' | 'error' | 'canceled'
@@ -143,6 +144,7 @@ export function cancelTask(id: string): boolean {
   if (!controller) return false
   // 先解除暂停：否则任务停在第 20 行等闸门，abort 之后还得等闸门 flush 才看得到取消
   setPaused(controller.signal, false)
+  setDownloadersPausedBySignal(controller.signal, false)
   controller.abort()
   const task = tasks.get(id)
   if (task && (task.status === 'running' || task.status === 'paused')) {
@@ -153,6 +155,7 @@ export function cancelTask(id: string): boolean {
     const c = controllers.get(cid)
     if (!c) continue
     setPaused(c.signal, false)
+    setDownloadersPausedBySignal(c.signal, false)
     c.abort()
   }
   return true
@@ -164,11 +167,13 @@ export function pauseTask(id: string): boolean {
   const task = tasks.get(id)
   if (!controller || !task || task.status !== 'running') return false
   if (!setPaused(controller.signal, true)) return false
+  setDownloadersPausedBySignal(controller.signal, true)
   publish({ ...task, status: 'paused' })
   for (const cid of descendants(id)) {
     const c = controllers.get(cid)
     if (!c) continue
     if (setPaused(c.signal, true)) {
+      setDownloadersPausedBySignal(c.signal, true)
       const ct = tasks.get(cid)
       if (ct && ct.status === 'running') publish({ ...ct, status: 'paused' })
     }
@@ -182,15 +187,24 @@ export function resumeTask(id: string): boolean {
   const task = tasks.get(id)
   if (!controller || !task || task.status !== 'paused') return false
   setPaused(controller.signal, false)
+  setDownloadersPausedBySignal(controller.signal, false)
   publish({ ...task, status: 'running' })
   for (const cid of descendants(id)) {
     const c = controllers.get(cid)
     if (!c) continue
     setPaused(c.signal, false)
+    setDownloadersPausedBySignal(c.signal, false)
     const ct = tasks.get(cid)
     if (ct && ct.status === 'paused') publish({ ...ct, status: 'running' })
   }
   return true
+}
+
+/** 反查：这个 signal 属于哪个任务（下载面板的暂停/继续/取消要同步到任务树） */
+export function findTaskIdBySignal(signal?: AbortSignal): string | undefined {
+  if (!signal) return undefined
+  for (const [id, c] of controllers) if (c.signal === signal) return id
+  return undefined
 }
 
 export function clearFinishedTasks(): TaskInfo[] {

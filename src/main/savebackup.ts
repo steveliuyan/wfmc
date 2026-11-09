@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { SaveBackup, SavesBackupResult } from '../shared/types'
+import type { SaveBackup, SaveBackupKind, SavesBackupResult } from '../shared/types'
 import { readZipEntry, readZipFromFile, zipDirectory } from './zip'
 
 export type { SavesBackupResult }
@@ -23,7 +23,14 @@ interface BackupMeta {
   instanceId: string
   instanceName?: string
   mcVersion?: string
+  loader?: string
+  loaderVersion?: string
   createdAt: number
+  /** 传上云端之后的记录 id / 时间（没传过就没有） */
+  cloudId?: string
+  cloudAt?: number
+  /** 这份怎么来的（老快照没有） */
+  kind?: SaveBackupKind
 }
 
 function metaFile(zipFile: string): string {
@@ -52,7 +59,7 @@ export function createBackup(
   backupDir: string,
   instanceId: string,
   date = new Date(),
-  extra: { instanceName?: string; mcVersion?: string } = {}
+  extra: { instanceName?: string; mcVersion?: string; loader?: string; loaderVersion?: string; kind?: SaveBackupKind } = {}
 ): SavesBackupResult | undefined {
   if (!fs.existsSync(savesDir)) return undefined
   const worlds = listWorldDirs(savesDir)
@@ -74,6 +81,9 @@ export function createBackup(
     instanceId,
     instanceName: extra.instanceName,
     mcVersion: extra.mcVersion,
+    loader: extra.loader,
+    loaderVersion: extra.loaderVersion,
+    kind: extra.kind,
     createdAt: date.getTime()
   }
   try {
@@ -81,7 +91,32 @@ export function createBackup(
   } catch {
     /* 说明文件写不进去也不影响快照本身 */
   }
-  return { file: out, worlds, files, bytes, instanceId, instanceName: extra.instanceName, mcVersion: extra.mcVersion }
+  return {
+    file: out,
+    worlds,
+    files,
+    bytes,
+    instanceId,
+    instanceName: extra.instanceName,
+    mcVersion: extra.mcVersion,
+    loader: extra.loader,
+    loaderVersion: extra.loaderVersion
+  }
+}
+
+/** 上传成功后在 .zip.json 里记一笔：这份已经同步到云端了（列表能点亮徽标） */
+export function markBackupSynced(zipFile: string, cloudId: string, at = Date.now()): void {
+  const meta = readBackupMeta(zipFile)
+  if (!meta) return
+  try {
+    fs.writeFileSync(
+      metaFile(zipFile),
+      JSON.stringify({ ...meta, cloudId, cloudAt: at }, null, 2),
+      'utf-8'
+    )
+  } catch {
+    /* 记不上不影响备份本身 */
+  }
 }
 
 /** 读快照旁边的说明（老快照没有就返回 undefined） */
@@ -113,13 +148,31 @@ export function listBackups(backupDir: string, instanceId: string): SaveBackup[]
           worlds: meta?.worlds,
           files: meta?.files,
           instanceName: meta?.instanceName,
-          mcVersion: meta?.mcVersion
+          mcVersion: meta?.mcVersion,
+          cloudId: meta?.cloudId,
+          cloudAt: meta?.cloudAt,
+          kind: meta?.kind
         }
       })
       .sort((a, b) => b.time - a.time)
   } catch {
     return []
   }
+}
+
+/**
+ * 删掉一份快照（连同旁边的 .zip.json）。
+ * 只认备份目录里的文件 —— 别处的路径一律拒掉，免得传错了把系统文件删了。
+ */
+export function deleteBackup(backupDir: string, file: string): boolean {
+  const full = path.resolve(file)
+  if (path.dirname(full).toLowerCase() !== path.resolve(backupDir).toLowerCase()) {
+    throw new Error('只能删备份目录里的快照')
+  }
+  if (!fs.existsSync(full)) return false
+  fs.rmSync(full, { force: true })
+  fs.rmSync(metaFile(full), { force: true })
+  return true
 }
 
 /** 只保留最近 keep 份（safety 那份不算在 keep 里），返回删掉的份数 */
@@ -145,7 +198,8 @@ export function pruneBackups(backupDir: string, instanceId: string, keep = 12): 
 export function restoreBackup(
   savesDir: string,
   backupDir: string,
-  file: string
+  file: string,
+  opts: { avoidOverwrite?: boolean } = {}
 ): { restored: number; worlds: string[] } {
   const full = path.resolve(file)
   if (path.dirname(full).toLowerCase() !== path.resolve(backupDir).toLowerCase()) {
@@ -157,6 +211,23 @@ export function restoreBackup(
   const worlds = new Set<string>()
   let restored = 0
 
+  // 从别的整合包/别的电脑带回来的存档：目标 saves 里已经有同名世界时不能直接覆盖
+  // （两个不同的世界合到一起 = 区块错乱），改成「世界名（云端恢复 2）」另存一份。
+  const remap = new Map<string, string>()
+  if (opts.avoidOverwrite) {
+    const tops = new Set<string>()
+    for (const e of entries) {
+      const top = e.name.split('/')[0]
+      if (top) tops.add(top)
+    }
+    for (const top of tops) {
+      if (!fs.existsSync(path.join(savesDir, top))) continue
+      let n = 2
+      while (fs.existsSync(path.join(savesDir, `${top}（云端恢复 ${n}）`))) n++
+      remap.set(top, `${top}（云端恢复 ${n}）`)
+    }
+  }
+
   for (const entry of entries) {
     if (entry.isDirectory || entry.name.endsWith('/')) continue
     // 带 .. / 绝对路径 / 盘符的条目直接丢掉（防 zip slip，别把文件写到 saves 外面）
@@ -165,6 +236,8 @@ export function restoreBackup(
     }
     const parts = entry.name.split('/').filter((p) => p.length > 0)
     if (parts.length === 0) continue
+    const renamed = remap.get(parts[0])
+    if (renamed) parts[0] = renamed
     const dest = path.join(savesDir, ...parts)
     const resolved = path.resolve(dest)
     if (resolved !== path.resolve(savesDir) && !resolved.startsWith(path.resolve(savesDir) + path.sep)) continue

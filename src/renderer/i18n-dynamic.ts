@@ -127,6 +127,11 @@ export function convertDynamic(value: string): string | undefined {
   if ((m = v.match(/^最近启动：(.+)$/))) return `Last launch: ${m[1]}`
   if ((m = v.match(/^已安装 (.+) 个$/))) return `${m[1]} installed`
   if ((m = v.match(/^还剩 (.+)$/))) return `${m[1]} left`
+
+  /* --- 1.3.0：内容管理搜索 / 打开备份文件夹 --- */
+  if ((m = v.match(/^（已显示 (.+)）$/))) return ` (showing ${m[1]})`
+  if ((m = v.match(/^往下滚继续加载（还剩 (.+) 个）$/))) return `Scroll down to load more (${m[1]} left)`
+  if ((m = v.match(/^已打开：(.+)$/))) return `Opened: ${m[1]}`
   if ((m = v.match(/^(.+)\/(.+) 人$/))) return `${m[1]}/${m[2]} players`
   if ((m = v.match(/^TUNNEL (.+)$/))) return value
 
@@ -323,6 +328,20 @@ export function convertDynamic(value: string): string | undefined {
 
   if ((m = v.match(/^WFMC (.+) · WanFan Minecraft Launcher · Electron \+ React \+ @xmcl 内核（MIT）$/)))
     return `WFMC ${m[1]} · WanFan Minecraft Launcher · Electron + React + @xmcl core (MIT)`
+
+  /* --- 1.3.1：国内站占位符 / 云端份数 / 实例删除 / 快照回滚确认 --- */
+  if ((m = v.match(/^用中文搜(.+)，例如：机械动力、钠、光影$/)))
+    return `Search ${m[1]} in Chinese — try Create, Sodium, shaders`
+  if ((m = v.match(/^。云端保留自动 (.+) 份 \/ 手动 (.+) 份，由服务器统一管理。$/)))
+    return `. The cloud keeps ${m[1]} automatic and ${m[2]} manual backups, managed by the server.`
+  if ((m = v.match(/^「(.+)」会连同游戏文件一起删除（(.+)），删掉就找不回来了，确定？$/)))
+    return `"${m[1]}" will be deleted together with its game files (${m[2]}). This can't be undone. Continue?`
+  if ((m = v.match(/^把存档回滚到「(.+)」这份快照？[\s\S]*$/)))
+    return `Roll the world back to the snapshot from "${m[1]}"? The current world is saved as another snapshot first (an extra "Pre-rollback copy" entry), so you can still roll back again if you change your mind.`
+  if ((m = v.match(/^当前存档已另存为「(.+)」，需要时回滚它就行$/)))
+    return `The current world was saved as "${m[1]}" — roll back to it if you need to`
+  if ((m = v.match(/^删掉「(.+)」这份快照（(.+)）？[\s\S]*$/)))
+    return `Delete the snapshot from "${m[1]}" (${m[2]})? Only that zip goes away and the current world is untouched, but you can't roll back to this one any more.`
 
   return undefined
 }

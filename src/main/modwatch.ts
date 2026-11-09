@@ -1,8 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ensureGamePath } from './paths'
-import { diagnoseMods, type ModIssue } from './moddoctor'
+import { diagnoseModsAsync, type ModIssue } from './moddoctor'
 import { store } from './store'
+import { listTasks } from './tasks'
 
 /**
  * 体检常驻：盯着实例的 mods 目录，一有增删改就在后台重跑一遍体检，
@@ -30,12 +31,21 @@ export function setModsDiagnosisListener(fn: ((payload: ModsDiagnosisPayload) =>
   listener = fn
 }
 
+/**
+ * 攒一会儿再扫。
+ * 装整合包的时候 jar 是一个一个落盘的，每次变动都立刻全量重扫等于反复把主进程钉住
+ * （用户感受到的就是「一进内容管理就卡」）。有任务在跑就等久一点，等它下完再扫一次。
+ */
 function schedule(instanceId: string) {
   if (timer) clearTimeout(timer)
-  timer = setTimeout(() => {
-    timer = null
-    void runDiagnosis(instanceId)
-  }, 1200)
+  const busy = listTasks().some((t) => t.status === 'running')
+  timer = setTimeout(
+    () => {
+      timer = null
+      void runDiagnosis(instanceId)
+    },
+    busy ? 6000 : 1200
+  )
 }
 
 /** 跑一遍体检并推送（也用于打开页面时的首帧） */
@@ -47,7 +57,7 @@ export async function runDiagnosis(instanceId: string): Promise<ModsDiagnosisPay
   running = true
   const keyAtStart = watchedKey
   try {
-    const res = await diagnoseMods(instanceId)
+    const res = await diagnoseModsAsync(instanceId)
     const payload: ModsDiagnosisPayload = {
       instanceId,
       issues: res.issues,

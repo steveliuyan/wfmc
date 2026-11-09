@@ -3,7 +3,8 @@ import path from 'node:path'
 import { Version, type ResolvedVersion } from '@xmcl/core'
 import type { ProgressFn } from '../shared/types'
 import { downloadAll, downloadFile, fetchJson, sources } from './net'
-import { MultiDownloader, registerDownloader, unregisterDownloader } from './fastdl'
+import { MultiDownloader, isDownloadPaused, registerDownloader, unregisterDownloader } from './fastdl'
+import { isPaused } from './pause'
 import { store } from './store'
 import type { TaskContext, TaskKind } from './tasks'
 
@@ -31,10 +32,13 @@ function threads(defaultN = 16) {
   return n >= 4 ? Math.min(n, 32) : defaultN
 }
 
-/** 速度计：把字节流变成 "3.2 MB/s · 剩 1:20" */
+/** 字节计：只统计已下载字节和"真正在跑的时间"，速度/剩余时间交给渲染层显示一份就够 */
 function makeMeter() {
   let bytes = 0
   const startAt = Date.now()
+  /** 暂停时把计时也停住：否则分母一直涨，速度会一路往下掉、剩余时间一路往上爬，看着像还在下 */
+  let pausedAt = 0
+  let pausedMs = 0
   return {
     add(delta: number) {
       bytes += delta
@@ -42,19 +46,24 @@ function makeMeter() {
     get total() {
       return bytes
     },
-    /** 全程平均速度：比瞬时速度稳得多，剩余时间也只信它 */
-    get avgSpeed() {
-      const secs = (Date.now() - startAt) / 1000
-      return secs > 0.3 ? bytes / secs : 0
+    /** p=true 记下暂停起点，p=false 把这段暂停时间从分母里扣掉 */
+    setPaused(p: boolean) {
+      if (p) {
+        if (!pausedAt) pausedAt = Date.now()
+      } else if (pausedAt) {
+        pausedMs += Date.now() - pausedAt
+        pausedAt = 0
+      }
     },
-    text(remainingBytes?: number) {
-      const speed = this.avgSpeed
-      const mb = (speed / 1024 / 1024).toFixed(2)
-      if (!remainingBytes || speed <= 0) return `${mb} MB/s`
-      const left = Math.max(0, remainingBytes / speed)
-      const mm = Math.floor(left / 60)
-      const ss = Math.floor(left % 60)
-      return `${mb} MB/s · 剩 ${mm}:${String(ss).padStart(2, '0')}`
+    /** 真正在跑的时间（不含暂停） */
+    get activeSecs() {
+      const end = pausedAt || Date.now()
+      return Math.max(0, (end - startAt - pausedMs) / 1000)
+    },
+    /** 全程平均速度：只给日志/兜底用。正文里不再显示速度——渲染层已经有实时 ↓ 速度，两处都显示会打架 */
+    get avgSpeed() {
+      const secs = this.activeSecs
+      return secs > 0.3 ? bytes / secs : 0
     }
   }
 }
@@ -183,15 +192,20 @@ async function installLibraries(
   // downloadAll 的回调是「按文件」触发的，单个大文件根本不动；
   // 所以再挂一个 500ms 的心跳，按已下载字节数上报，进度条才是连续的
   let doneCount = 0
-  const emit = (cur: number, tot: number) =>
+  // 暂停中（下载面板的暂停、或任务面板的暂停）要把文本冻住，别让速度/剩余时间继续爬
+  const pausedNow = () => isDownloadPaused(key) || isPaused(signal)
+  const emit = (cur: number, tot: number) => {
+    const p = pausedNow()
+    meter.setPaused(p)
     onProgress?.({
       key,
-      phase: `下载依赖库 libraries（${meter.text(Math.max(0, remaining - skipped - meter.total))}）`,
+      phase: `${p ? '已暂停 · ' : ''}下载依赖库 libraries`,
       current: cur,
       total: tot,
       bytes: Math.min(remaining, skipped + meter.total),
       totalBytes: remaining
     })
+  }
   const ticker = setInterval(() => emit(doneCount, items.length), 500)
   try {
     return await dl.downloadAll(items, (done, total) => {
@@ -245,15 +259,19 @@ async function installAssets(
   const remaining = items.reduce((s, i) => s + (i.size ?? 0), 0)
   const skipped = alreadyDoneBytes(items)
   let doneCount = 0
-  const emit = (cur: number, tot: number) =>
+  const pausedNow = () => isDownloadPaused(key) || isPaused(signal)
+  const emit = (cur: number, tot: number) => {
+    const p = pausedNow()
+    meter.setPaused(p)
     onProgress?.({
       key,
-      phase: `下载游戏资源 assets（${objects.length} 个 · ${meter.text(Math.max(0, remaining - skipped - meter.total))}）`,
+      phase: `${p ? '已暂停 · ' : ''}下载游戏资源 assets（${objects.length} 个）`,
       current: cur,
       total: tot,
       bytes: Math.min(remaining, skipped + meter.total),
       totalBytes: remaining
     })
+  }
   const ticker = setInterval(() => emit(doneCount, items.length), 500)
   try {
     return await dl.downloadAll(items, (done, total) => {
@@ -287,15 +305,18 @@ async function installClientJar(
   const dl = new MultiDownloader({ threads: threads(), chunks: 8, onBytes: (d) => meter.add(d), signal })
   registerDownloader(key, dl)
   // 单个大 jar：靠 500ms 心跳上报字节，不然进度会一直是 0% 然后突然 100%
-  const emit = () =>
+  const emit = () => {
+    const p = isDownloadPaused(key) || isPaused(signal)
+    meter.setPaused(p)
     onProgress?.({
       key,
-      phase: `下载游戏客户端 client.jar（${meter.text(Math.max(0, client.size - meter.total))}）`,
+      phase: `${p ? '已暂停 · ' : ''}下载游戏客户端 client.jar`,
       current: meter.total,
       total: client.size,
       bytes: Math.min(client.size, meter.total),
       totalBytes: client.size
     })
+  }
   const ticker = setInterval(emit, 500)
   try {
     const errs = await dl.downloadAll([{ urls, dest, size: client.size, conns: 8 }], () => emit())

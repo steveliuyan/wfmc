@@ -121,7 +121,7 @@ export default function CloudPanel() {
 
   return (
     <>
-      <div className="set-head">
+      <div className="set-head set-head-sub">
         <div className="set-icon">⛁</div>
         <div className="set-titles">
           <div className="set-title">备份</div>
@@ -260,6 +260,22 @@ export default function CloudPanel() {
           >
             {busy === 'stest' ? '测试中…' : '测试能不能写进去'}
           </button>
+          {/* 备份到底存哪了，得能一键打开（只有本地文件夹有意义） */}
+          {storage === 'local' && !!status?.storageTarget && (
+            <button
+              className="btn sm ghost"
+              title={status.storageTarget}
+              onClick={() =>
+                void run('reveal', async () => {
+                  const r = await api.openBackupDir()
+                  if (!r.ok) throw new Error(r.message)
+                  return `已打开：${r.message}`
+                })
+              }
+            >
+              打开备份文件夹
+            </button>
+          )}
         </div>
         <p className="set-note">
           {status?.error ? `上次出错：${status.error}` : `当前放在：${status?.storageTarget ?? '—'}`}
@@ -267,41 +283,7 @@ export default function CloudPanel() {
         </p>
       </div>
 
-      {/* 登录入口只留一处：设置 → 账号（WfmcAccountPanel）。
-          这里只显示状态，不再放第二个「用浏览器登录」。 */}
-      <div className="set-block">
-        <div className="set-block-title">
-          云端账号
-          <span className={loggedIn ? 'cloud-badge ok' : 'cloud-badge'}>{loggedIn ? '已登录' : '未登录'}</span>
-        </div>
-        <p className="set-note" style={{ marginTop: 0 }}>
-          {loggedIn
-            ? `已登录：${status?.account?.displayName || status?.account?.email || '（账号）'}。云端保留自动 ${autoKeep} 份 / 手动 ${manualKeep} 份，由服务器统一管理。`
-            : '登录之后，每次备份会额外往云端存一份，换电脑时能直接还原；不登录也一切正常，只是备份只在本地。'}
-        </p>
-        <div className="set-actions">
-          <button
-            className="btn sm"
-            onClick={() => window.dispatchEvent(new CustomEvent('wfmc:goto-section', { detail: 'wfmc' }))}
-          >
-            {loggedIn ? '管理账号' : '去「账号」里登录'}
-          </button>
-          <button
-            className="btn sm ghost"
-            disabled={busy === 'test'}
-            onClick={() =>
-              void run('test', async () => {
-                const r = await api.testCloud()
-                toast(r.message, r.authorized ? 'success' : 'error')
-                return r.message
-              })
-            }
-          >
-            {busy === 'test' ? '测试中…' : '测试连接'}
-          </button>
-        </div>
-        <p className="set-note">登录、退出登录、改密码都在这个分区最上面的「账号」块里，这里只显示状态。</p>
-      </div>
+      {/* 登录状态 / 管理账号 / 测试连接都并到上面「云端账号」那一块了，这里不重复第二份 */}
 
       <div className="set-block">
         <div className="set-block-title">开关</div>

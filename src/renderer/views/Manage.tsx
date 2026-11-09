@@ -1,11 +1,21 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { api, formatSize, friendlyError, type ModIssue, type ModUpdateItem, type ModGraph as ModGraphData } from '../api'
 import ModGraphView from '../components/ModGraph'
 import SaveWorkshop from '../components/SaveWorkshop'
 import ShareCard from '../components/ShareCard'
+import Select from '../components/Select'
 import { useLauncher, useT } from '../store'
 import { takeDeepLink } from '../deeplink'
-import type { ContentItem, ContentKind, CrashDiagnosis, CrashReport, SaveBackup } from '../../shared/types'
+import type {
+  CloudSaveItem,
+  CloudSaveLimits,
+  CloudSaveUsage,
+  ContentItem,
+  ContentKind,
+  CrashDiagnosis,
+  CrashReport,
+  SaveBackup
+} from '../../shared/types'
 import type { PageId } from '../App'
 
 type Tab = ContentKind | 'crash' | 'log' | 'updates' | 'shots' | 'datapacks' | 'deps' | 'workshop'
@@ -24,8 +34,38 @@ const tabs: { id: Tab; label: string }[] = [
   { id: 'log', label: '运行日志' }
 ]
 
-export default function Manage({ goto }: { goto: (p: PageId) => void }) {
-  const { current, currentId, toast, logs, clearLogs, askConfirm, instances, settings, saveSettings, refreshInstances } =
+/** 快照是哪来的：让用户一眼看出「启动前自动」「回滚前保护」和手动打的那份 */
+function kindLabel(kind?: SaveBackup['kind']): string {
+  switch (kind) {
+    case 'launch':
+      return '启动前自动'
+    case 'manual':
+      return '手动备份'
+    case 'safety':
+      return '回滚前保护'
+    case 'cloud':
+      return '云端下载'
+    default:
+      return '快照'
+  }
+}
+
+function kindHint(kind?: SaveBackup['kind']): string {
+  switch (kind) {
+    case 'launch':
+      return '每次启动游戏前自动打的一份'
+    case 'manual':
+      return '你手动点「立即备份 / 备份所有存档」打的'
+    case 'safety':
+      return '回滚之前自动给「当时的存档」留的一份，滚错了可以再滚回来'
+    case 'cloud':
+      return '从云端下载回来的快照'
+    default:
+      return '较早版本的快照，没记下是怎么来的'
+  }
+}
+
+export default function Manage({ goto }: { goto: (p: PageId) => void }) {  const { current, currentId, toast, logs, clearLogs, askConfirm, instances, settings, saveSettings, refreshInstances } =
     useLauncher()
   const t = useT()
   const [tab, setTab] = useState<Tab>('mods')
@@ -51,6 +91,9 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
   const [explainOpen, setExplainOpen] = useState<Record<number, boolean>>({})
   // 用户手动忽略了这一轮结果（mods 再变会重新弹出来）
   const [diagDismissed, setDiagDismissed] = useState(false)
+  // 手动体检：只有用户点了按钮才扫（一进页面就自动扫会把界面卡住），扫描中画进度条
+  const [diagBusy, setDiagBusy] = useState(false)
+  const [diagProg, setDiagProg] = useState<{ done: number; total: number } | null>(null)
   const [packOrder, setPackOrder] = useState<string[]>([])
   const [langCov, setLangCov] = useState<{
     packs: { name: string; count: number }[]
@@ -62,7 +105,16 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
   const [langDetailOpen, setLangDetailOpen] = useState(false)
   // 存档快照（回滚用）
   const [savesBackups, setSavesBackups] = useState<SaveBackup[]>([])
-  const [showBackups, setShowBackups] = useState(false)
+  // 默认展开：切到「存档」就该看见快照，而不是先点一下按钮才出现
+  const [showBackups, setShowBackups] = useState(true)
+  // 云端存档备份
+  const [cloudReady, setCloudReady] = useState(false)
+  const [cloudItems, setCloudItems] = useState<CloudSaveItem[]>([])
+  const [cloudLimits, setCloudLimits] = useState<CloudSaveLimits | undefined>(undefined)
+  const [cloudUsage, setCloudUsage] = useState<CloudSaveUsage | undefined>(undefined)
+  const [cloudBusy, setCloudBusy] = useState('')
+  // 一键补前置/启前置的批量处理中标记
+  const [batchBusy, setBatchBusy] = useState(false)
   // 模组快照（更新/折腾前的后悔药）
   const [modsBackups, setModsBackups] = useState<
     { file: string; name: string; bytes: number; time: number; count: number; partial: boolean }[]
@@ -81,6 +133,21 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
   const [packs, setPacks] = useState<ContentItem[]>([])
   const [checking, setChecking] = useState(false)
   const [loading, setLoading] = useState(false)
+  // 大整合包（几百个 mod）不能一次全渲染：搜索 + 分批挂载
+  const [query, setQuery] = useState('')
+  const [shown, setShown] = useState(120)
+  const moreRef = useRef<HTMLDivElement | null>(null)
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return items
+    return items.filter(
+      (i) =>
+        (i.title ?? '').toLowerCase().includes(q) ||
+        i.name.toLowerCase().includes(q) ||
+        (i.description ?? '').toLowerCase().includes(q)
+    )
+  }, [items, query])
+  const visible = filtered.slice(0, shown)
 
   const isContent = tab !== 'crash' && tab !== 'log' && tab !== 'updates' && tab !== 'shots' && tab !== 'datapacks'
 
@@ -103,22 +170,48 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, activeId])
 
-  // 体检常驻：切到这个实例就盯住它的 mods 目录，结果实时推过来（后台扫描有缓存，别怕慢）
+  // 体检：**没有**「一进内容管理就自动扫」了。
+  // 几百个 jar 冷缓存首扫要拆包，以前一打开页面就自动跑，用户感觉是「点进内容管理就卡」。
+  // 现在只有点「体检模组」才扫，扫描时主进程把进度推过来画进度条。
   useEffect(() => {
     if (!activeId) return
     let alive = true
-    const off = api.onModsDiagnosis((p) => {
+    const offDiag = api.onModsDiagnosis((p) => {
       if (!alive || p.instanceId !== activeId) return
       setModIssues(p.issues)
       setDiagDismissed(false)
     })
-    api.startModWatch(activeId).catch(() => undefined)
+    const offProg = api.onModsDiagnoseProgress((p) => {
+      if (!alive || p.instanceId !== activeId) return
+      setDiagProg({ done: p.done, total: p.total })
+    })
     return () => {
       alive = false
-      off()
+      offDiag()
+      offProg()
+      // 万一之前开着常驻扫描，切走时顺手关掉
       api.stopModWatch().catch(() => undefined)
     }
   }, [activeId])
+
+  /** 手动体检：progress 回调会一直推，扫完把结果留在页面上 */
+  const runDiagnose = async (): Promise<{ mods: number; bad: number } | undefined> => {
+    if (!activeId || diagBusy) return undefined
+    setDiagBusy(true)
+    setDiagProg(null)
+    try {
+      const res = await api.diagnoseMods(activeId)
+      setModIssues(res.issues)
+      setDiagDismissed(false)
+      return { mods: res.mods.length, bad: res.issues.filter((x) => x.level !== 'info').length }
+    } catch (e) {
+      toast(`体检失败：${friendlyError(e)}`, 'error')
+      return undefined
+    } finally {
+      setDiagBusy(false)
+      setDiagProg(null)
+    }
+  }
   useEffect(() => {
     if (!targetId && currentId) setTargetId(currentId)
   }, [currentId, targetId])
@@ -136,11 +229,57 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     setShots(await api.screenshots(activeId))
   }
 
+  // 元数据后台补：一批一批合进 items。攒 200ms 再 setItems，
+  // 免得 50 批补丁各触发一次几百行重渲染。
+  const metaBuf = useRef(new Map<string, Partial<ContentItem>>())
+  const metaTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => {
+    const off = api.onContentMeta((p) => {
+      if (p.instanceId !== activeId || p.kind !== tab) return
+      for (const x of p.patches) metaBuf.current.set(x.path, x.meta)
+      if (metaTimer.current) return
+      metaTimer.current = setTimeout(() => {
+        metaTimer.current = undefined
+        const buf = metaBuf.current
+        metaBuf.current = new Map()
+        if (buf.size === 0) return
+        setItems((prev) => prev.map((it) => (buf.has(it.path) ? { ...it, ...buf.get(it.path)! } : it)))
+      }, 200)
+    })
+    return () => {
+      off()
+      if (metaTimer.current) clearTimeout(metaTimer.current)
+      metaTimer.current = undefined
+    }
+  }, [activeId, tab])
+
+  // 换搜索词 / 换实例：显示条数重置回 120
+  useEffect(() => setShown(120), [query, activeId, tab])
+
+  // 滚到底自动再挂 120 条
+  useEffect(() => {
+    const el = moreRef.current
+    if (!el) return
+    const io = new IntersectionObserver(
+      (es) => {
+        if (es.some((e) => e.isIntersecting)) setShown((n) => n + 120)
+      },
+      { rootMargin: '400px' }
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [visible.length, filtered.length])
   const refresh = async () => {
     if (!activeId) return
     setLoading(true)
     try {
-      if (isContent) setItems(await api.listContent(activeId, tab as ContentKind))
+      if (isContent) {
+        const kind = tab as ContentKind
+        // 第一步：只读目录（毫秒级）——几百个 mod 也不会卡住主进程
+        setItems(await api.listContent(activeId, kind))
+        // 第二步：元数据（名字/简介/图标）后台分批补，结果走 onContentMeta
+        void api.enrichContent(activeId, kind)
+      }
       else if (tab === 'crash') setCrashes(await api.crashReports(activeId))
       else if (tab === 'shots') setShots(await api.screenshots(activeId))
     } catch (e) {
@@ -169,6 +308,26 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
     } catch {
       setSavesBackups([])
     }
+    void refreshCloud()
+  }
+
+  /** 云端存档：能不能用、有哪些、用了多少 */
+  const refreshCloud = async () => {
+    try {
+      const ready = await api.cloudSavesReady()
+      setCloudReady(ready)
+      if (!ready) {
+        setCloudItems([])
+        return
+      }
+      const [list, usage] = await Promise.all([api.cloudSaveList(), api.cloudSaveUsage()])
+      setCloudItems(list.items)
+      setCloudLimits(list.limits)
+      setCloudUsage(usage)
+    } catch {
+      setCloudReady(false)
+      setCloudItems([])
+    }
   }
 
   useEffect(() => {
@@ -177,9 +336,10 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
   }, [tab, activeId])
 
   useEffect(() => {
-    if (tab === 'saves' && showBackups) refreshBackups()
+    // 进「存档」页就把快照列表拉出来（本地 + 云端一起），不用再点一次「存档快照」
+    if (tab === 'saves') void refreshBackups()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, activeId, showBackups])
+  }, [tab, activeId])
 
   // 依赖图：切到这个 tab 才读
   useEffect(() => {
@@ -249,15 +409,17 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
           <div className="row wrap" style={{ alignItems: 'flex-end' }}>
             <label className="field-mini" style={{ minWidth: 280 }}>
               <span className="mini-label">看哪个实例的内容</span>
-              <select value={activeId} onChange={(e) => setTargetId(e.target.value)}>
-                {instances.map((i) => (
-                  <option key={i.id} value={i.id}>
-                    {i.name}（{i.mcVersion}
-                    {i.loader !== 'vanilla' ? ` · ${i.loader}` : ''}）
-                    {i.installed ? '' : ' · 未安装'}
-                  </option>
-                ))}
-              </select>
+              <Select
+                value={activeId}
+                width={360}
+                options={instances.map((i) => ({
+                  value: i.id,
+                  label: `${i.name}（${i.mcVersion}${i.loader !== 'vanilla' ? ` · ${i.loader}` : ''}）${
+                    i.installed ? '' : ' · 未安装'
+                  }`
+                }))}
+                onChange={(v) => setTargetId(v)}
+              />
             </label>
             <span className="muted small">
               直接在这切，不用回首页。下面的模组 / 存档 / 日志都跟着这个实例走。
@@ -487,27 +649,39 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
           <div className="row wrap">
             <button
               className="btn primary"
+              disabled={diagBusy}
               onClick={async () => {
-                try {
-                  const res = await api.diagnoseMods(activeId)
-                  setModIssues(res.issues)
-                  setDiagDismissed(false)
-                  const bad = res.issues.filter((x) => x.level !== 'info').length
-                  toast(
-                    bad === 0 ? `体检通过：${res.mods.length} 个 mod 都没问题` : `体检完成：扫描 ${res.mods.length} 个 mod，${bad} 条要处理`,
-                    bad === 0 ? 'success' : 'error'
-                  )
-                } catch (e) {
-                  toast(`体检失败：${(e as Error).message}`, 'error')
-                }
+                const r = await runDiagnose()
+                if (!r) return
+                toast(
+                  r.bad === 0 ? `体检通过：${r.mods} 个 mod 都没问题` : `体检完成：扫描 ${r.mods} 个 mod，${r.bad} 条要处理`,
+                  r.bad === 0 ? 'success' : 'error'
+                )
               }}
             >
-              {modIssues.length > 0 ? '重新体检' : '体检模组（重复 / 加载器 / 前置）'}
+              {diagBusy ? '体检中…' : modIssues.length > 0 ? '重新体检' : '体检模组（重复 / 加载器 / 前置）'}
             </button>
             <span className="muted small">
-              开着的时候会一直盯着 mods 目录，装/删模组后自动重扫；只读 jar 里的元数据，离线可跑
+              点一下才扫（不再一进页面就自动扫，免得卡）；只读 jar 里的元数据，离线可跑
             </span>
           </div>
+          {diagBusy && (
+            <div style={{ marginTop: 10 }}>
+              <div className="progress-label">
+                <span>正在体检模组…</span>
+                <span className="progress-nums">
+                  <b>{diagProg ? diagProg.done : 0}</b> / {diagProg?.total ?? '?'} 个 jar
+                </span>
+              </div>
+              <div className="bar">
+                <i
+                  style={{
+                    width: `${diagProg && diagProg.total > 0 ? Math.min(100, Math.round((diagProg.done / diagProg.total) * 100)) : 3}%`
+                  }}
+                />
+              </div>
+            </div>
+          )}
           {!diagDismissed && modIssues.length > 0 && (
             <div style={{ marginTop: 12 }}>
               <div className="row-between" style={{ border: 'none', marginBottom: 6 }}>
@@ -521,9 +695,56 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                     return `体检结果：${i} 条提示，没有要处理的`
                   })()}
                 </span>
-                <button className="btn sm ghost" onClick={() => setDiagDismissed(true)}>
-                  ✕ 忽略
-                </button>
+                <span className="row" style={{ gap: 6 }}>
+                  {(() => {
+                    const deps = [...new Set(modIssues.map((x) => x.fixDep).filter((d): d is string => !!d))]
+                    const enables = [...new Set(modIssues.flatMap((x) => x.enableFiles ?? []))]
+                    const total = deps.length + enables.length
+                    if (total === 0) return null
+                    return (
+                      <button
+                        className="btn sm primary"
+                        disabled={batchBusy}
+                        title="把体检里所有缺的前置一次性装好（本机就有、只是被禁用的会先启用）"
+                        onClick={async () => {
+                          setBatchBusy(true)
+                          try {
+                            if (enables.length > 0) {
+                              await api.enableContent(activeId, 'mods', enables)
+                              toast(`已启用 ${enables.length} 个本机就有的前置`, 'success')
+                            }
+                            if (deps.length > 0) {
+                              toast(`正在从 Modrinth 找 ${deps.length} 个前置并安装…`, 'info')
+                              const r = await api.fixModDeps(activeId, deps)
+                              const ok = r.items.filter((x) => x.status === 'installed')
+                              const bad = r.items.filter((x) => x.status !== 'installed')
+                              if (ok.length > 0)
+                                toast(`装好了 ${ok.length} 个：${ok.map((x) => x.title ?? x.modid).join('、')}`, 'success')
+                              if (bad.length > 0) {
+                                const why = bad.slice(0, 3).map((x) => `${x.modid}（${x.detail ?? '原因不明'}）`)
+                                toast(
+                                  `${bad.length} 个没自动装上：${why.join('、')}${bad.length > 3 ? ' 等' : ''}。这类前置多半只在 CurseForge 上——设置里填了 CF Key 会自动去那边补；没填就只能到「模组」页按名字手搜`,
+                                  'error'
+                                )
+                              }
+                            }
+                            await runDiagnose()
+                            await refresh()
+                          } catch (e) {
+                            toast(`批量处理失败：${friendlyError(e)}`, 'error')
+                          } finally {
+                            setBatchBusy(false)
+                          }
+                        }}
+                      >
+                        {batchBusy ? '处理中…' : `一键处理 ${total} 项`}
+                      </button>
+                    )
+                  })()}
+                  <button className="btn sm ghost" onClick={() => setDiagDismissed(true)}>
+                    ✕ 忽略
+                  </button>
+                </span>
               </div>
               {modIssues.map((issue, i) => (
                 <div className={`diag-item lv-${issue.level}`} key={i}>
@@ -828,6 +1049,10 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                 >
                   备份所有存档
                 </button>
+                {/* 备份完想马上看看 zip 落在哪：不用先展开「存档快照」 */}
+                <button className="btn ghost" onClick={() => void api.openBackupsDir()}>
+                  打开备份所在文件夹
+                </button>
                 <button
                   className={showBackups ? 'btn' : 'btn ghost'}
                   onClick={async () => {
@@ -881,29 +1106,72 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                 <div className="file-row content-row" key={b.file}>
                   <div className="content-icon dir">🗂</div>
                   <div className="content-main">
-                    <div className="content-name">{new Date(b.time).toLocaleString('zh-CN', { hour12: false })}</div>
-                    <div className="content-desc" title={b.file}>{b.name}</div>
-                    {(b.worlds?.length || b.files) && (
-                      <div className="muted small" style={{ marginLeft: 40, marginTop: -6, marginBottom: 4 }}>
-                        {b.worlds?.length ? `${b.worlds.length} 个存档` : ''}
-                        {b.worlds?.length && b.files ? ' · ' : ''}
-                        {b.files ? `${b.files} 个文件` : ''}
-                      </div>
-                    )}
+                    <div className="content-name">
+                      {new Date(b.time).toLocaleString('zh-CN', { hour12: false })}
+                      <span className={'badge' + (b.kind === 'safety' ? ' ok' : '')} title={kindHint(b.kind)}>
+                        {kindLabel(b.kind)}
+                      </span>
+                      {b.cloudId && (
+                        <span className="badge ok" title="这份已经同步到云端">
+                          已同步云端
+                        </span>
+                      )}
+                    </div>
+                    <div className="content-desc" title={b.name}>
+                      {b.name}
+                    </div>
+                    <div className="muted small" style={{ marginTop: 2 }}>
+                      {[
+                        b.worlds?.length ? `${b.worlds.length} 个存档` : '',
+                        b.files ? `${b.files} 个文件` : '',
+                        formatSize(b.bytes)
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </div>
                   </div>
-                  <span className="muted small">{formatSize(b.bytes)}</span>
+                  <span className="muted small">{b.kind === 'safety' ? '回滚保护' : ''}</span>
                   <span className="row">
+                    {cloudReady && !b.cloudId && (
+                      <button
+                        className="btn sm ghost"
+                        disabled={!!cloudBusy}
+                        onClick={async () => {
+                          setCloudBusy(b.file)
+                          try {
+                            const r = await api.uploadCloudSave(activeId, b.file)
+                            toast(r.message, r.ok ? 'success' : 'error')
+                            if (r.ok) await refreshBackups()
+                          } catch (e) {
+                            toast('上传失败：' + friendlyError(e), 'error')
+                          } finally {
+                            setCloudBusy('')
+                          }
+                        }}
+                      >
+                        {cloudBusy === b.file ? '上传中…' : '传这份到云端'}
+                      </button>
+                    )}
                     <button className="btn sm ghost" onClick={() => void api.revealBackup(b.file)}>
                       打开所在文件夹
                     </button>
                     <button
                       className="btn sm"
                       onClick={async () => {
-                        if (!(await askConfirm({ title: '回滚存档', message: '把存档回滚到这份快照？回滚前会先自动备份当前存档。', okText: '回滚' }))) return
+                        const when = new Date(b.time).toLocaleString('zh-CN', { hour12: false })
+                        if (
+                          !(await askConfirm({
+                            title: '回滚存档',
+                            message: `把存档回滚到「${when}」这份快照？\n回滚前会先把当前存档另存一份（列表里会多出一条标着「回滚前保护」的快照），回滚后后悔了还能再滚回来。`,
+                            okText: '回滚'
+                          }))
+                        )
+                          return
                         try {
                           const r = await api.restoreSaveBackup(activeId, b.file)
                           toast(`已回滚 ${r.restored} 个文件（${r.worlds.join('、') || '存档'}）`, 'success')
-                          if (r.safetyBackup) toast('回滚前的存档也留了一份，后悔了还能退回来', 'info')
+                          if (r.safetyBackup)
+                            toast(`当前存档已另存为「${r.safetyBackup.split(/[\\/]/).pop()}」，需要时回滚它就行`, 'info')
                           await refresh()
                           await refreshBackups()
                           setWorlds(await api.worlds(activeId))
@@ -914,6 +1182,30 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                     >
                       回滚
                     </button>
+                    <button
+                      className="btn sm danger ghost"
+                      onClick={async () => {
+                        const when = new Date(b.time).toLocaleString('zh-CN', { hour12: false })
+                        if (
+                          !(await askConfirm({
+                            title: '删除快照',
+                            message: `删掉「${when}」这份快照（${formatSize(b.bytes)}）？\n只删这个 zip，当前存档不受影响。删了就不能回滚到这一份了。`,
+                            okText: '删除',
+                            danger: true
+                          }))
+                        )
+                          return
+                        try {
+                          await api.deleteSaveBackup(b.file)
+                          toast('已删除这份快照', 'success')
+                          await refreshBackups()
+                        } catch (e) {
+                          toast('删除失败：' + friendlyError(e), 'error')
+                        }
+                      }}
+                    >
+                      删除
+                    </button>
                   </span>
                 </div>
               ))}
@@ -922,11 +1214,174 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
         </div>
       )}
 
+      {tab === 'saves' && showBackups && cloudReady && (
+        <div className="card">
+          <div className="toolbar">
+            <b>云端存档</b>
+            <span className="muted small">
+              {cloudUsage
+                ? `已用 ${formatSize(cloudUsage.usedBytes)} / ${formatSize(cloudUsage.quotaBytes)}，共 ${cloudUsage.count} 份 · 每个实例云端最多留 ${cloudLimits?.savesKeep ?? 10} 份`
+                : '读云端清单中…'}
+            </span>
+            <span className="spacer" />
+            <button
+              className="btn sm ghost"
+              disabled={!!cloudBusy}
+              onClick={async () => {
+                setCloudBusy('new')
+                try {
+                  const r = await api.uploadCloudSave(activeId)
+                  toast(r.message, r.ok ? 'success' : 'error')
+                  if (r.ok) await refreshBackups()
+                } catch (e) {
+                  toast('上传失败：' + friendlyError(e), 'error')
+                } finally {
+                  setCloudBusy('')
+                }
+              }}
+            >
+              {cloudBusy === 'new' ? '上传中…' : '打一份新的传上云'}
+            </button>
+            <button className="btn sm ghost" onClick={() => void refreshCloud()}>
+              刷新云端清单
+            </button>
+          </div>
+          {cloudItems.length === 0 ? (
+            <div className="muted small">
+              云端还没有存档。点上面「打一份新的传上云」，或者本地备份好之后点快照行里的「传这份到云端」。
+            </div>
+          ) : (
+            groupCloudBackups(cloudItems).map((g) => (
+              <div key={g.key} style={{ marginBottom: 12 }}>
+                <div className="row wrap" style={{ gap: 8, marginBottom: 4 }}>
+                  <b>{g.instanceName || g.instance}</b>
+                  {g.instance !== activeId && (
+                    <span
+                      className="badge"
+                      title={
+                        instances.some((i) => i.id === g.instance)
+                          ? '这份存档是别的实例打的，回滚时会恢复到当前实例'
+                          : '本机没有这个实例（换电脑/换整合包了），只能恢复到当前实例'
+                      }
+                    >
+                      {instances.some((i) => i.id === g.instance) ? '别的整合包' : '本机没有这个包'}
+                    </span>
+                  )}
+                  <span className="badge">{g.mcVersion || '未知版本'}</span>
+                  {g.loader && (
+                    <span className="badge">
+                      {g.loader}
+                      {g.loaderVersion ? ` ${g.loaderVersion}` : ''}
+                    </span>
+                  )}
+                  <span className="muted small">{g.items.length} 份</span>
+                </div>
+                <div className="file-list">
+                  {g.items.map((it) => (
+                    <div className="file-row content-row" key={it.id}>
+                      <div className="content-icon dir">☁️</div>
+                      <div className="content-main">
+                        <div className="content-name">
+                          {new Date(it.createdAt * 1000).toLocaleString('zh-CN', { hour12: false })}
+                        </div>
+                        <div className="content-desc">
+                          {it.worlds?.length ? it.worlds.slice(0, 3).join('、') : '存档'}
+                          {it.worlds?.length > 3 ? ` 等 ${it.worlds.length} 个` : ''}
+                          {it.files ? ` · ${it.files} 个文件` : ''}
+                        </div>
+                      </div>
+                      <span className="muted small">{formatSize(it.bytes)}</span>
+                      <span className="row">
+                        <button
+                          className="btn sm"
+                          disabled={!!cloudBusy}
+                          onClick={async () => {
+                            if (
+                              !(await askConfirm({
+                                title: '从云端回滚',
+                                message: [
+                                  `把这份云端存档下载下来，恢复到当前实例「${current?.name ?? '当前实例'}」的 saves 里？`,
+                                  g.instance !== activeId
+                                    ? `\n注意：这份是「${g.instanceName || g.instance}」（${g.mcVersion || '未知版本'}${g.loader ? ' · ' + g.loader : ''}）打的，不是当前实例。存档里的方块/物品是按那个整合包的模组记的 —— 当前实例的 MC 版本和模组不一样的话，进游戏会缺方块、缺物品，严重的会崩。想正常玩就把那个整合包也装上，再在这里选它作当前实例回滚。`
+                                    : '',
+                                  '\n下载后会校验完整性，回滚前也会先本地备份一份当前存档（多出一条「回滚前保护」）。'
+                                ].join('')
+                              }))
+                            )
+                              return
+                            setCloudBusy(it.id)
+                            try {
+                              const r = await api.restoreCloudSave(activeId, it.id)
+                              toast(`已回滚 ${r.restored} 个文件（${r.worlds.join('、') || '存档'}）`, 'success')
+                              if (r.safetyBackup) toast('回滚前的存档也留了一份', 'info')
+                              await refresh()
+                              await refreshBackups()
+                              setWorlds(await api.worlds(activeId))
+                            } catch (e) {
+                              toast('回滚失败：' + friendlyError(e), 'error')
+                            } finally {
+                              setCloudBusy('')
+                            }
+                          }}
+                        >
+                          {cloudBusy === it.id ? '处理中…' : '下载并回滚'}
+                        </button>
+                        <button
+                          className="btn sm ghost"
+                          disabled={!!cloudBusy}
+                          onClick={async () => {
+                            if (
+                              !(await askConfirm({
+                                title: '删除云端存档',
+                                message: '从云端删掉这份存档？本地的那份不受影响。',
+                                okText: '删除'
+                              }))
+                            )
+                              return
+                            try {
+                              await api.deleteCloudSave(it.id)
+                              toast('已从云端删掉', 'success')
+                              await refreshCloud()
+                            } catch (e) {
+                              toast('删除失败：' + friendlyError(e), 'error')
+                            }
+                          }}
+                        >
+                          删除
+                        </button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
       {isContent && (
         <div className="card">
+          {items.length > 0 && (
+            <div className="row wrap" style={{ marginBottom: 8 }}>
+              <input
+                type="search"
+                value={query}
+                placeholder={t('搜索名字或简介…', 'Search name or description…')}
+                onChange={(e) => setQuery(e.target.value)}
+                style={{ flex: 1, minWidth: 180 }}
+              />
+              <span className="muted small">
+                {`${filtered.length} / ${items.length}`}
+                {shown < filtered.length ? `（已显示 ${shown}）` : ''}
+              </span>
+            </div>
+          )}
           {items.length === 0 && <div className="muted small">这个目录还是空的。可以点上面的「导入本地文件」。</div>}
+          {items.length > 0 && filtered.length === 0 && (
+            <div className="muted small">没有匹配「{query}」的内容。</div>
+          )}
           <div className="file-list">
-            {items.map((item) => (
+            {visible.map((item) => (
               <div className="file-row content-row" key={item.path}>
                 {item.isDir ? (
                   <div className="content-icon dir">📁</div>
@@ -1004,6 +1459,11 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
                 </span>
               </div>
             ))}
+            {visible.length < filtered.length && (
+              <div ref={moreRef} className="muted small" style={{ padding: '10px 0', textAlign: 'center' }}>
+                {`往下滚继续加载（还剩 ${filtered.length - visible.length} 个）`}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1400,4 +1860,37 @@ export default function Manage({ goto }: { goto: (p: PageId) => void }) {
       )}
     </div>
   )
+}
+/** 云端存档按「实例 → 版本/加载器」分组，组内按时间倒序（服务端本来就倒序，这里只保证） */
+function groupCloudBackups(items: CloudSaveItem[]): {
+  key: string
+  instance: string
+  instanceName?: string
+  mcVersion?: string
+  loader?: string
+  loaderVersion?: string
+  items: CloudSaveItem[]
+}[] {
+  const map = new Map<string, { key: string; instance: string; instanceName?: string; mcVersion?: string; loader?: string; loaderVersion?: string; items: CloudSaveItem[] }>()
+  for (const it of items) {
+    const key = [it.instance, it.mcVersion ?? '', it.loader ?? '', it.loaderVersion ?? ''].join('|')
+    let g = map.get(key)
+    if (!g) {
+      g = {
+        key,
+        instance: it.instance,
+        instanceName: it.instanceName,
+        mcVersion: it.mcVersion,
+        loader: it.loader,
+        loaderVersion: it.loaderVersion,
+        items: []
+      }
+      map.set(key, g)
+    }
+    g.items.push(it)
+  }
+  const groups = [...map.values()]
+  for (const g of groups) g.items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+  groups.sort((a, b) => (b.items[0]?.createdAt || 0) - (a.items[0]?.createdAt || 0))
+  return groups
 }

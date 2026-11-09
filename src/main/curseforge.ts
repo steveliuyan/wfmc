@@ -18,6 +18,28 @@ function clientOrThrow(): CurseforgeV1Client {
   return new CurseforgeV1Client(key)
 }
 
+/**
+ * 在 CurseForge 里搜什么。classId 是 CF 自己的分类号：
+ * 6 = 模组、4471 = 整合包、12 = 资源包、6552 = 光影、17 = 世界。
+ */
+export type CfContentType = 'mod' | 'modpack' | 'resourcepack' | 'shader' | 'world'
+
+export const CF_TYPE_LABEL: Record<CfContentType, string> = {
+  mod: '模组',
+  modpack: '整合包',
+  resourcepack: '资源包',
+  shader: '光影',
+  world: '世界'
+}
+
+const CF_CLASS_ID: Record<CfContentType, number> = {
+  mod: 6,
+  modpack: 4471,
+  resourcepack: 12,
+  shader: 6552,
+  world: 17
+}
+
 export interface CfMod {
   id: number
   name: string
@@ -36,6 +58,8 @@ export async function searchCurseforge(input: {
   mcVersion?: string
   loader?: string
   pageSize?: number
+  /** 搜哪一类：模组 / 整合包 / 资源包 / 光影 / 世界（默认模组） */
+  type?: CfContentType
 }): Promise<{ hits: CfMod[]; cn?: { matched: boolean; used: string[] } }> {
   const client = clientOrThrow()
   const raw = (input.query ?? '').trim()
@@ -49,10 +73,11 @@ export async function searchCurseforge(input: {
     try {
       const result = await client.searchMods({
         gameId: 432, // Minecraft
-        classId: 6, // Mods
+        classId: CF_CLASS_ID[input.type ?? 'mod'],
         searchFilter: q || undefined,
         gameVersion: input.mcVersion,
-        modLoaderType: input.loader ? modLoaderTypeOf(input.loader) : undefined,
+        // 整合包/资源包/光影不看模组加载器，只按游戏版本过滤
+        modLoaderType: (input.type ?? 'mod') === 'mod' && input.loader ? modLoaderTypeOf(input.loader) : undefined,
         sortField: 2, // 2 = popularity
         sortOrder: 'desc',
         pageSize: input.pageSize ?? 20
@@ -108,11 +133,23 @@ function modLoaderTypeOf(loader: string): number | undefined {
   return undefined
 }
 
-/** 装最新匹配版本到实例的 mods */
+/** 各类内容在实例里的落点 */
+const CF_FOLDER: Record<Exclude<CfContentType, 'modpack' | 'world'>, string> = {
+  mod: 'mods',
+  resourcepack: 'resourcepacks',
+  shader: 'shaderpacks'
+}
+
+/**
+ * 装最新匹配版本到实例。
+ * type：模组进 mods、资源包进 resourcepacks、光影进 shaderpacks；
+ * 整合包不能这样装（它是一整个实例），调用方要先下载 zip 再走导入流程。
+ */
 export async function installCurseforgeMod(
   instanceId: string,
   modId: number,
-  onProgress?: ProgressFn
+  onProgress?: ProgressFn,
+  type: 'mod' | 'resourcepack' | 'shader' = 'mod'
 ): Promise<string> {
   const instance = store.getInstance(instanceId)
   if (!instance) throw new Error('实例不存在')
@@ -127,9 +164,9 @@ export async function installCurseforgeMod(
   const file = files.data?.[0]
   if (!file) throw new Error('这个模组没有适配当前版本/加载器的文件')
 
-  const modsDir = path.join(ensureGamePath(instance), 'mods')
-  fs.mkdirSync(modsDir, { recursive: true })
-  const dest = path.join(modsDir, file.fileName)
+  const targetDir = path.join(ensureGamePath(instance), CF_FOLDER[type])
+  fs.mkdirSync(targetDir, { recursive: true })
+  const dest = path.join(targetDir, file.fileName)
   onProgress?.({ key: `cf-${modId}`, phase: `下载 ${file.displayName}`, current: 0, total: 1 })
   await downloadFile(
     file.downloadUrl ?? '',
