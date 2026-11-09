@@ -329,7 +329,9 @@ export function convertDynamic(value: string): string | undefined {
   if ((m = v.match(/^WFMC (.+) · WanFan Minecraft Launcher · Electron \+ React \+ @xmcl 内核（MIT）$/)))
     return `WFMC ${m[1]} · WanFan Minecraft Launcher · Electron + React + @xmcl core (MIT)`
 
-  /* --- 1.3.1：国内站占位符 / 云端份数 / 实例删除 / 快照回滚确认 --- */
+  /* --- 1.3.1：国内站占位符 / 云端份数 / 实例删除 / 快照回滚确认 / 补前置失败 --- */
+  if ((m = v.match(/^(.+) 个没自动装上：(.+)。这类前置多半只在 CurseForge 上[\s\S]*$/)))
+    return `${m[1]} items could not be installed automatically: ${m[2]}. Such prerequisites usually live only on CurseForge — with a CF key set, WFMC fetches them there automatically; without one, search the name by hand in the Mods tab`
   if ((m = v.match(/^用中文搜(.+)，例如：机械动力、钠、光影$/)))
     return `Search ${m[1]} in Chinese — try Create, Sodium, shaders`
   if ((m = v.match(/^。云端保留自动 (.+) 份 \/ 手动 (.+) 份，由服务器统一管理。$/)))
