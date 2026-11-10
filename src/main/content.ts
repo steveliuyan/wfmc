@@ -807,6 +807,61 @@ function scrubText(text: string, subs: [string, string][]): string {
 
 const TEXT_LIKE = /\.(log|txt|json|json5|toml|ya?ml|cfg|conf|properties|ini|md)$/i
 
+/** 给 AI / 命令行看的诊断摘要（不走 zip，直接把结论和关键报错行读到上下文里） */
+export interface DiagnosticsReport {
+  /** 一句话体检结论 */
+  conclusion: string
+  /** 体检逐条问题（error / warn / info） */
+  issues: { level: string; title: string; detail: string }[]
+  /** latest.log 里最像「报错」的若干行（已去空、截断，最多 maxErrorLines 行） */
+  errorLines: string[]
+}
+
+/**
+ * 体检结论 + 关键报错行。用的是和导出诊断包同一个 `diagnoseMods`，口径一致；
+ * 区别是它**不打包、不落地**，直接把文字给调用方（AI 助手读路径没用，要能读到内容）。
+ */
+export function diagnosticsReport(instanceId: string, maxErrorLines = 30): DiagnosticsReport {
+  const instance = store.getInstance(instanceId)
+  if (!instance) throw new Error('实例不存在')
+  const root = instanceRoot(instanceId)
+
+  const issues: { level: string; title: string; detail: string }[] = []
+  let conclusion = ''
+  try {
+    const res = diagnoseMods(instanceId)
+    const active = res.mods.filter((m) => !m.disabled).length
+    for (const x of res.issues) issues.push({ level: x.level, title: x.title, detail: x.detail })
+    const errors = res.issues.filter((x) => x.level === 'error').length
+    const warns = res.issues.filter((x) => x.level === 'warn').length
+    conclusion =
+      errors + warns === 0
+        ? `体检通过：启用 ${active} 个模组（共 ${res.mods.length} 个文件），没发现 error / warn 级问题。`
+        : `体检发现 ${errors} 个 error、${warns} 个 warn：启用 ${active} 个模组（共 ${res.mods.length} 个文件）。`
+  } catch (e) {
+    conclusion = `体检没跑成功（不影响看日志）：${(e as Error)?.message ?? e}`
+  }
+
+  const errorLines: string[] = []
+  try {
+    const logPath = path.join(root, 'logs', 'latest.log')
+    if (fs.existsSync(logPath)) {
+      const re = /\b(error|fatal|severe|exception|caused by|failed|could not|cannot|crash)\b/i
+      for (const raw of fs.readFileSync(logPath, 'utf-8').split(/\r?\n/)) {
+        if (re.test(raw)) {
+          const line = raw.trim()
+          if (line) errorLines.push(line.length > 500 ? `${line.slice(0, 500)}…` : line)
+        }
+      }
+      if (errorLines.length > maxErrorLines) errorLines.splice(0, errorLines.length - maxErrorLines)
+    }
+  } catch {
+    /* 没日志 / 读不了就不给，不影响结论 */
+  }
+
+  return { conclusion, issues, errorLines }
+}
+
 export function exportDiagnostics(instanceId: string): string {
   const instance = store.getInstance(instanceId)
   if (!instance) throw new Error('实例不存在')

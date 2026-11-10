@@ -39,6 +39,7 @@ import {
   makeCleanroomVersionJson,
   makeLegacyFabricVersionJson
 } from '../../src/main/minecraft'
+import { TOOLS, toolSummaries } from '../../src/main/mcp'
 
 let passed = 0
 const ok = (name: string) => {
@@ -343,5 +344,53 @@ ok('Legacy Fabric 版本 json 合成（改名 + 继承原版）')
 assert.equal(loaderTargetVersionId('legacyfabric', '1.12.2', '0.16.10'), 'legacyfabric-loader-0.16.10-1.12.2')
 assert.equal(loaderTargetVersionId('cleanroom', '1.12.2', '0.7.14-alpha'), 'cleanroom-0.7.14-alpha')
 ok('加载器 versionId 命名（不与官方 Fabric 冲突）')
+
+/* ------------------------- MCP 工具清单 / 参数校验 ------------------------- */
+// mcp-stdio 那端只做 JSON-RPC 翻译，工具名和参数结构全凭 TOOLS 这一份表；
+// 抄错一个字段，AI 客户端那边就是「参数校验失败」，而界面上看不出任何异常，所以这里钉死。
+
+const toolNames = TOOLS.map((t) => t.name)
+assert.equal(new Set(toolNames).size, toolNames.length, '工具名必须唯一（重名会让 tools/list 出现两条、调用只能命中一条）')
+assert.ok(TOOLS.length >= 16, `工具数量应 ≥16（1.3.4 的 13 个 + 1.3.5 新增的 3 个），实际 ${TOOLS.length}`)
+
+for (const t of TOOLS) {
+  const where = `工具 ${t.name}`
+  assert.ok(/^[a-z][a-z0-9_]*$/.test(t.name), `${where}：名字只能小写字母/数字/下划线`)
+  assert.ok(t.title.trim().length > 0, `${where}：title 不能为空（弹层标题就靠它）`)
+  assert.ok(t.description.trim().length > 0, `${where}：description 不能为空（AI 靠它决定要不要调）`)
+  const schema = t.inputSchema as { type?: string; properties?: Record<string, unknown>; required?: string[] }
+  assert.equal(schema.type, 'object', `${where}：inputSchema.type 必须是 object`)
+  const props = schema.properties ?? {}
+  assert.equal(typeof props, 'object', `${where}：inputSchema.properties 必须是对象`)
+  for (const key of schema.required ?? []) {
+    assert.ok(key in props, `${where}：required 里的 ${key} 没有在 properties 里声明`)
+  }
+  if (t.write) {
+    // 写操作必须能生成一句人话，否则确认弹层里只剩工具名，用户没法判断要不要点允许
+    assert.equal(typeof t.describe, 'function', `${where}：write 工具必须提供 describe()（弹层要把参数说成人话）`)
+  }
+}
+
+for (const name of ['launcher_status', 'export_diagnostics', 'rename_instance', 'delete_instance', 'list_backups']) {
+  assert.ok(toolNames.includes(name), `必须暴露工具 ${name}`)
+}
+// 1.3.5 新增的三个都在这儿：改名的参数是 instanceId + name，删除只认 instanceId，列备份只认 instanceId
+const renameTool = TOOLS.find((t) => t.name === 'rename_instance')!
+assert.deepEqual(renameTool.inputSchema.required, ['instanceId', 'name'], 'rename_instance 必须要求 instanceId + name')
+const deleteTool = TOOLS.find((t) => t.name === 'delete_instance')!
+assert.deepEqual(deleteTool.inputSchema.required, ['instanceId'], 'delete_instance 只要求 instanceId（keepFiles 可选）')
+assert.equal(deleteTool.write, true, 'delete_instance 是写操作，必须走确认')
+const backupTool = TOOLS.find((t) => t.name === 'list_backups')!
+assert.notEqual(backupTool.write, true, 'list_backups 只读，不该弹确认')
+
+// toolSummaries() 是 tools/list 的返回体，形状必须和 TOOLS 对齐（名称一一对应、不带 run 函数）
+const summaries = toolSummaries() as { name: string; description?: string }[]
+assert.equal(summaries.length, TOOLS.length, 'toolSummaries() 条数必须和 TOOLS 一致')
+assert.deepEqual(
+  summaries.map((s) => s.name),
+  toolNames,
+  'toolSummaries() 的名字和顺序必须跟 TOOLS 一致（stdio 端不认识具体工具，全靠这份清单）'
+)
+ok('MCP 工具清单（名字唯一 / 参数结构合法 / 写操作有 describe / 1.3.5 三工具就位）')
 
 console.log(`\n核心断言 ${passed} 组全部通过`)

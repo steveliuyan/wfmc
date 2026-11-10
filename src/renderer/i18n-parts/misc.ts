@@ -346,6 +346,10 @@ export const PAIRS: [string, string][] = [
   ['核心逻辑补了 11 组自动化断言：NBT 读写往返、依赖成环、联机清单编解码与差分，一条 npm run test:core 跑完。', 'Added 11 automated assertions for core logic: NBT read/write round-trips, dependency cycles, and room manifest encode/decode plus diffing — all run by npm run test:core.'],
   ['中文化自检阈值提到 100%：以后漏翻一句，npm run i18n:check 直接失败。', 'The translation self-check now requires 100%: a single untranslated string makes npm run i18n:check fail.'],
 
+  // ---------- 1.3.5 升级公告 ----------
+  ['AI 助手导出诊断时直接给结论：不再只回一个 zip 路径，体检结果和日志里的关键报错行会一并读出来。', 'Diagnostics export now gives you the answer: instead of only a zip path, you get the check-up result and the key error lines from the log.'],
+  ['确认弹窗多了「记住并一直允许」：同一个操作点一次，以后（含重启启动器）都不再问；设置页「AI 助手」里能一键清空。', 'The confirm dialog can now remember: click once and that action stops asking, even after a restart; clear the list any time in Settings → AI assistant.'],
+  ['AI 助手新增三个操作：实例改名、删除实例（连文件一起删前会弹窗确认）、列出存档与模组备份。', 'Three new AI actions: rename an instance, delete an instance (it asks first before deleting files) and list save / mod backups.'],
   // ---------- 1.3.4 升级公告 ----------
   ['新增 Legacy Fabric、Cleanroom 两个加载器：1.12.2 的老 Fabric 整合包能装了，Cleanroom 会自动下 Java 25。', 'Added two loaders: Legacy Fabric (for 1.12.2-and-older Fabric packs) and Cleanroom, which installs Java 25 for you.'],
   ['设置里多了「AI 助手」：打开后复制配置粘进 Claude Desktop，AI 就能帮你开游戏、装整合包、看启动日志；会改东西的操作都会先弹窗问你。', 'New AI assistant in Settings: turn it on, paste the config into Claude Desktop, and the AI can launch the game, install modpacks and read launch logs — anything that changes something asks you first.'],
@@ -392,5 +396,6 @@ export const PAIRS: [string, string][] = [
   ['世界', 'Worlds'],
   ['等', 'and more'],
   ['整合包是一整个实例，下载 zip 后拖进启动器窗口就能导入', 'A modpack is a whole instance: download the zip and drag it into the launcher window to import it'],
-  ['输入一下', 'Type something']
+  ['输入一下', 'Type something'],
+  ['已清空，之后这些操作会重新弹窗确认', 'Cleared — these actions will ask for confirmation again']
 ]

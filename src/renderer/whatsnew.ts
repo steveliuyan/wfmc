@@ -14,6 +14,14 @@ const SEEN_KEY = 'whatsNewSeen'
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '1.3.5',
+    items: [
+      'AI 助手导出诊断时直接给结论：不再只回一个 zip 路径，体检结果和日志里的关键报错行会一并读出来。',
+      '确认弹窗多了「记住并一直允许」：同一个操作点一次，以后（含重启启动器）都不再问；设置页「AI 助手」里能一键清空。',
+      'AI 助手新增三个操作：实例改名、删除实例（连文件一起删前会弹窗确认）、列出存档与模组备份。'
+    ]
+  },
+  {
     version: '1.3.4',
     items: [
       '新增 Legacy Fabric、Cleanroom 两个加载器：1.12.2 的老 Fabric 整合包能装了，Cleanroom 会自动下 Java 25。',

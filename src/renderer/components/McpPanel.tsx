@@ -42,8 +42,21 @@ export default function McpPanel() {
     }
   }
 
-  const copyConfig = async () => {
-    const cfg = status?.clientConfig?.json
+  /** 清空「记住并一直允许」的名单：下次这些操作又会弹窗确认 */
+  const clearAllowed = async () => {
+    setBusy(true)
+    try {
+      await saveSettings({ mcp: { ...(settings?.mcp ?? {}), allowedTools: [] } })
+      setStatus(await api.mcpRestart())
+      toast('已清空，之后这些操作会重新弹窗确认')
+    } catch (e) {
+      toast(`设置没生效：${(e as Error)?.message ?? e}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const copyConfig = async () => {    const cfg = status?.clientConfig?.json
     if (!cfg) return
     try {
       await navigator.clipboard.writeText(cfg)
@@ -98,6 +111,17 @@ export default function McpPanel() {
           />
         </label>
       </div>
+
+      {status && status.allowedTools.length > 0 && (
+        <div className="set-note">
+          <p>
+            已记住 {status.allowedTools.length} 个操作不再确认：{status.allowedTools.join('、')}
+          </p>
+          <button type="button" className="btn sm" onClick={() => void clearAllowed()} disabled={busy}>
+            清空已记住的操作
+          </button>
+        </div>
+      )}
 
       <p className="set-note">
         {status?.running

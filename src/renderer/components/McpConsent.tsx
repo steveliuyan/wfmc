@@ -6,7 +6,8 @@ import { api, type McpConsentRequest } from '../api'
  *
  * 这个弹层不参与 App 里那套 `modal` 排队：它是被外部请求推出来的，优先级最高，
  * 所以 z-index 单独压到所有弹层上面（`.mcp-consent-mask`）。
- * 点「本会话都允许」只对这一个工具生效，进程关掉就忘。
+ * 点「记住并一直允许」会对这个工具记一笔（写进 settings.json），以后连重启启动器都不再问；
+ * 想收回就去设置页「AI 助手」里清空已记住的工具。
  */
 export default function McpConsent({ req, onDone }: { req: McpConsentRequest; onDone: () => void }) {
   const reply = async (allow: boolean, remember = false) => {
@@ -32,14 +33,15 @@ export default function McpConsent({ req, onDone }: { req: McpConsentRequest; on
         )}
         <p className="muted small">
           允许这一次就会真的动手；不放心就点「拒绝」，AI 会收到「用户拒绝了这次操作」。
-          想省事点「本会话都允许」，只对这一个操作生效，关掉启动器就忘了。
+          嫌烦就点「记住并一直允许」，这个 AI 客户端以后调这个操作不再弹窗（存进设置，重启也记得），
+          想反悔去设置页「AI 助手」清空已记住的工具。
         </p>
         <div className="dialog-actions">
           <button className="btn" onClick={() => void reply(false)}>
             拒绝
           </button>
           <button className="btn" onClick={() => void reply(true, true)}>
-            本会话都允许
+            记住并一直允许
           </button>
           <button className="btn primary" onClick={() => void reply(true)} autoFocus>
             允许

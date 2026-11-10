@@ -1,6 +1,36 @@
 # 更新说明
 
-# 更新说明
+## 1.3.5（2026-11-11）
+
+「AI 助手」收口：诊断能读到结论、确认弹窗能记住、控制面多三个操作。
+
+### 诊断返回文本摘要
+
+- `export_diagnostics` 不再只回一个 zip 路径，改成返回 `{conclusion, issues, errorLines, file}`：一句话体检结论、逐条问题（等级/标题/说明）、`logs/latest.log` 里的关键报错行（最多 30 行，单行超长截断）。
+- 结论和界面里「体检模组」用的是同一个 `diagnoseMods`，口径一致；完整 zip 照样打，路径一并返回。
+- 新增 `content.ts` 的 `diagnosticsReport(instanceId, maxErrorLines = 30)`，纯读、不落地。
+
+### 确认弹窗持久化
+
+- `McpSettings` 新增 `allowedTools?: string[]`，存进 `settings.json`；「记住并一直允许」按工具记，**重启启动器也不再问**。
+- 主进程删掉原来的进程内 `sessionAllowed` Set，改读 `store.settings.mcp.allowedTools`；`mcpStatus()` 把它一并返回。
+- 设置页「AI 助手」显示「已记住 N 个操作不再确认」+ 一键清空。
+
+### 新增三个工具（13 → 16）
+
+- `rename_instance`（写）：只改显示名，校验非空 / ≤40 / 不重名，同步云端配置包。
+- `delete_instance`（写）：先确认。弹层里写清「保留文件」还是「连文件一起删，约 N 个文件 / N MB，不可恢复」；真删先 `killGame`，走任务面板进度。
+- `list_backups`（读）：存档快照 + 模组快照（文件名 / 时间 / 大小 / 世界数 / jar 数）。
+
+### 测试
+
+- `scripts/tests/core.ts` 新增「MCP 工具清单」一组断言：名字唯一、`inputSchema.type === 'object'`、`required ⊆ properties`、写工具必须有 `describe()`、三新工具就位、`toolSummaries()` 与 `TOOLS` 一一对应。
+- `scripts/test-core.mjs` 产物改到项目目录并加 `createRequire` banner——`mcp.ts` 会拖进 `@xmcl/*` / `yauzl` 这类 CJS 依赖，系统临时目录里解析不到 `node_modules`。
+
+### 门槛
+
+- `typecheck` 0 error；`test:core` 18 组全过；`i18n:check` 1380 条 100%。
+- 打包后 `ELECTRON_RUN_AS_NODE=1` 跑 `app.asar.unpacked/dist/main/mcp-stdio.js`，`initialize` / `tools/list` / `tools/call` 全通。
 
 ## 1.3.4（2026-11-10）
 

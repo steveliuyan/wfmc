@@ -59,7 +59,9 @@ export const Notification = class { static isSupported() { return false } show()
 export default { app, safeStorage, ipcMain, shell, dialog, BrowserWindow, Notification }
 `
 
-const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wfmc-testcore-'))
+// 产物放在项目目录里（不是系统临时目录）：mcp.ts 会顺带拖进 @xmcl/* / yauzl 这些
+// CommonJS 依赖，它们在运行时 require('fs')、找自己的 node_modules，只有待在项目树下才解析得到。
+const outDir = fs.mkdtempSync(path.join(root, '.tmp-testcore-'))
 const outFile = path.join(outDir, 'core.mjs')
 
 await build({
@@ -72,6 +74,17 @@ await build({
   logLevel: 'warning',
   absWorkingDir: root,
   external: ['node:*'],
+  // 打进来的 CJS 依赖要用真的 require / __dirname，esbuild 的 ESM 壳里默认没有
+  banner: {
+    js: [
+      "import { createRequire as __wfmcCr } from 'node:module'",
+      "import { fileURLToPath as __wfmcFu } from 'node:url'",
+      "import { dirname as __wfmcDir } from 'node:path'",
+      'const __filename = __wfmcFu(import.meta.url)',
+      'const __dirname = __wfmcDir(__filename)',
+      'const require = __wfmcCr(import.meta.url)'
+    ].join('\n')
+  },
   plugins: [
     {
       name: 'electron-stub',

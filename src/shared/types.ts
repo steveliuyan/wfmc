@@ -108,6 +108,11 @@ export interface McpSettings {
   enabled?: boolean
   /** true = 写操作不再逐次确认（自己用、或者完全信任这个 AI 时开） */
   trustAll?: boolean
+  /**
+   * 用户点过「本会话都允许」的写工具名单（持久化到 settings.json，重启后仍然免确认）。
+   * 设置页「AI 助手」里能一键清空。trustAll 打开时这个名单无所谓。
+   */
+  allowedTools?: string[]
 }
 
 /**

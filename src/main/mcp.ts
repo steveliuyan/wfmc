@@ -8,11 +8,11 @@ import type { Instance, LaunchStatePayload } from '../shared/types'
 import type { ResourceType } from './modrinth'
 import { store } from './store'
 import { clearLaunchLog, getLaunchLog, isRunning, killGame, launchInstance } from './launch'
-import { instanceDetail } from './instances'
+import { instanceDetail, renameInstance, deleteInstance, instanceDeleteSize } from './instances'
 import { installResource, searchResources } from './modrinth'
 import { installMrpackFromUrl } from './modpack'
 import { listServers, queryServer } from './servers'
-import { exportDiagnostics } from './content'
+import { diagnosticsReport, exportDiagnostics, listModsBackupFiles, listSaveBackups } from './content'
 import { refreshAccount } from './accounts'
 import { runTask } from './tasks'
 import { logError } from './errlog'
@@ -90,10 +90,20 @@ export interface ConsentRequest {
 }
 
 const pendingConsent = new Map<string, { resolve: (ok: boolean) => void; timer: NodeJS.Timeout }>()
-/** 本会话内「一直允许」过的工具（进程退出即失效，不写盘） */
-const sessionAllowed = new Set<string>()
 /** 每个待确认请求是哪个工具（「本会话都允许」要用） */
 const lastRequests = new Map<string, ConsentRequest>()
+
+/** 用户已经「记住允许」的写工具（存在 settings.mcp.allowedTools，重启后仍然免确认） */
+function allowedTools(): string[] {
+  return store.settings.mcp?.allowedTools ?? []
+}
+
+/** 记住一个工具：写进 settings 并立刻落盘（下次启动也不用再点） */
+function rememberTool(tool: string): void {
+  const cur = allowedTools()
+  if (cur.includes(tool)) return
+  store.setSettings({ mcp: { ...(store.settings.mcp ?? {}), allowedTools: [...cur, tool] } })
+}
 
 function broadcast(channel: string, payload: unknown) {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -108,7 +118,7 @@ function broadcast(channel: string, payload: unknown) {
  */
 async function askConsent(tool: ToolDef, args: Record<string, unknown>): Promise<boolean> {
   if (store.settings.mcp?.trustAll) return true
-  if (sessionAllowed.has(tool.name)) return true
+  if (allowedTools().includes(tool.name)) return true
   const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed())
   if (!win) return false
 
@@ -149,7 +159,7 @@ export function settleConsent(id: string, allow: boolean, remember: boolean): bo
   pendingConsent.delete(id)
   clearTimeout(entry.timer)
   const req = lastRequests.get(id)
-  if (allow && remember && req) sessionAllowed.add(req.tool)
+  if (allow && remember && req) rememberTool(req.tool)
   lastRequests.delete(id)
   entry.resolve(allow)
   return true
@@ -354,9 +364,9 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'export_diagnostics',
-    title: '导出诊断包',
+    title: '诊断这个实例',
     description:
-      '把某个实例的日志、模组清单、配置打成一个 zip，返回文件路径。排错时让用户把这个文件发过来最省事。',
+      '跑一遍体检（重复模组 / 加载器不匹配 / 缺前置）并把日志里的关键报错行摘出来，直接返回文字结论；同时把完整诊断包打成 zip 一并返回文件路径。',
     inputSchema: {
       type: 'object',
       properties: { instanceId: { type: 'string' } },
@@ -366,8 +376,15 @@ export const TOOLS: ToolDef[] = [
     async run(args) {
       const id = String(args.instanceId ?? '')
       if (!store.getInstance(id)) throw new Error(`没有这个实例：${id}`)
+      // 先把结论读出来（这个才是 AI 真正能用的），再顺手打一份完整包留档
+      const report = diagnosticsReport(id)
       const file = exportDiagnostics(id)
-      return { file }
+      return {
+        conclusion: report.conclusion,
+        issues: report.issues,
+        errorLines: report.errorLines,
+        file
+      }
     }
   },
   {
@@ -481,6 +498,111 @@ export const TOOLS: ToolDef[] = [
         )
       )
       return result
+    }
+  },
+  {
+    name: 'rename_instance',
+    title: '给实例改名',
+    description:
+      '只改实例的显示名（id、目录、存档、云端备份的键都不动）。最多 40 个字，不能和别的实例重名。',
+    write: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: { type: 'string' },
+        name: { type: 'string', description: '新名字（最多 40 个字符）' }
+      },
+      required: ['instanceId', 'name'],
+      additionalProperties: false
+    },
+    describe: (a) => `把实例 ${a.instanceId} 改名为「${a.name}」`,
+    async run(args) {
+      const id = String(args.instanceId ?? '')
+      const name = String(args.name ?? '')
+      const { instance } = renameInstance(id, name)
+      return { ok: true, instanceId: instance.id, name: instance.name }
+    }
+  },
+  {
+    name: 'delete_instance',
+    title: '删除实例',
+    description:
+      '把某个实例连同它的游戏文件一起删掉（不可恢复）。会先结束正在跑的游戏进程；删大整合包时进度在任务面板里。',
+    write: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: { type: 'string', description: '要删的实例 id' },
+        keepFiles: {
+          type: 'boolean',
+          description: 'true = 只从列表移除、保留磁盘文件；默认 false（连文件一起删）'
+        }
+      },
+      required: ['instanceId'],
+      additionalProperties: false
+    },
+    describe: (a) => {
+      const inst = store.getInstance(String(a.instanceId ?? ''))
+      const size = inst ? instanceDeleteSize(inst.id) : { files: 0, bytes: 0 }
+      const mb = Math.round((size.bytes / 1024 ** 2) * 10) / 10
+      const tail =
+        a.keepFiles === true
+          ? '（保留文件，只从列表移除）'
+          : `（连文件一起删，约 ${size.files} 个文件 / ${mb}MB，不可恢复）`
+      return `删除实例「${inst?.name ?? a.instanceId}」${tail}`
+    },
+    async run(args) {
+      const id = String(args.instanceId ?? '')
+      if (!store.getInstance(id)) throw new Error(`没有这个实例：${id}`)
+      const keepFiles = args.keepFiles === true
+      killGame(id)
+      if (keepFiles) {
+        deleteInstance(id, false)
+        return { ok: true, instanceId: id, removedFiles: false }
+      }
+      const name = store.getInstance(id)?.name ?? '实例'
+      await runTask('misc', `删除实例 ${name}`, async (ctx) => {
+        ctx.report({ phase: '统计文件…', current: 0, total: 1 })
+        deleteInstance(id, true, (p) => {
+          ctx.report({
+            phase: `删除文件 ${p.current}/${p.total}`,
+            current: p.current,
+            total: p.total,
+            detail: p.detail
+          })
+        })
+      })
+      return { ok: true, instanceId: id, removedFiles: true }
+    }
+  },
+  {
+    name: 'list_backups',
+    title: '列出备份',
+    description: '列出某实例的存档快照和模组快照（文件名、时间、大小、内含的世界 / jar 数）。',
+    inputSchema: {
+      type: 'object',
+      properties: { instanceId: { type: 'string' } },
+      required: ['instanceId'],
+      additionalProperties: false
+    },
+    async run(args) {
+      const id = String(args.instanceId ?? '')
+      if (!store.getInstance(id)) throw new Error(`没有这个实例：${id}`)
+      const saves = listSaveBackups(id).map((b) => ({
+        file: b.name,
+        time: b.time,
+        mb: Math.round((b.bytes / 1024 ** 2) * 10) / 10,
+        worlds: b.worlds ?? [],
+        files: b.files ?? null
+      }))
+      const mods = listModsBackupFiles(id).map((b) => ({
+        file: b.name,
+        time: b.time,
+        mb: Math.round((b.bytes / 1024 ** 2) * 10) / 10,
+        jars: b.count,
+        partial: b.partial
+      }))
+      return { instanceId: id, saveBackups: saves, modsBackups: mods }
     }
   }
 ]
@@ -607,6 +729,8 @@ export interface McpStatus {
   port: number
   endpointFile: string
   trustAll: boolean
+  /** 已经「记住允许」的写工具名单（设置页能清空） */
+  allowedTools: string[]
   pendingConsent: number
   /** 贴到 AI 客户端配置里的那段 JSON */
   clientConfig: { command: string; args: string[]; env: Record<string, string>; json: string }
@@ -619,6 +743,7 @@ export function mcpStatus(): McpStatus {
     port: listenPort,
     endpointFile: mcpEndpointPath(),
     trustAll: !!store.settings.mcp?.trustAll,
+    allowedTools: allowedTools(),
     pendingConsent: pendingConsent.size,
     clientConfig: mcpClientConfig()
   }

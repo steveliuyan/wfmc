@@ -260,6 +260,8 @@ export interface McpStatusInfo {
   port: number | null
   endpointFile: string
   trustAll: boolean
+  /** 已经「记住允许」的写工具名单 */
+  allowedTools: string[]
   pendingConsent: number
   clientConfig: { command: string; args: string[]; env: Record<string, string>; json: string }
 }
