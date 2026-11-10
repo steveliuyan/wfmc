@@ -7,7 +7,7 @@ import { downloadFile, fetchJson, fetchText, sources } from './net'
 import { runProcess } from './proc'
 import { store } from './store'
 import { ensureJava } from './java'
-import { installResolvedGame, installVanilla, type SpawnFn } from './game'
+import { installResolvedGame, installVanilla, libraryRelPath, type SpawnFn } from './game'
 import { readFileInsideZip } from './zip'
 
 export { installVanilla }
@@ -164,6 +164,53 @@ async function fabricArtifact(mcVersion: string, loaderVersion: string): Promise
   )
 }
 
+interface LegacyFabricArtifactLike {
+  loader: { version: string; stable?: boolean }
+}
+
+const LEGACY_FABRIC_META = 'https://meta.legacyfabric.net/v2'
+
+/**
+ * Legacy Fabric 的 loader 版本列表。
+ * 没有镜像（bmclapi 只镜像了官方 fabric-meta），而且这站偶尔超时，所以自己重试几轮。
+ */
+async function legacyFabricArtifacts(mcVersion: string): Promise<LegacyFabricArtifactLike[]> {
+  const url = `${LEGACY_FABRIC_META}/versions/loader/${encodeURIComponent(mcVersion)}`
+  let lastErr: unknown
+  for (let i = 1; i <= 3; i++) {
+    try {
+      return await fetchJsonAny<LegacyFabricArtifactLike[]>([url], 25_000)
+    } catch (e) {
+      lastErr = e
+      if (i < 3) await new Promise((r) => setTimeout(r, 800 * i))
+    }
+  }
+  throw new Error(`拉取 Legacy Fabric 版本列表失败：${(lastErr as Error)?.message ?? '网络错误'}`)
+}
+
+/** Cleanroom 的 maven 仓库：官方域名对 jar 会 307 到 nexus.jsdu.cn 镜像 */
+const CLEANROOM_REPOS = ['https://repo.cleanroommc.com/releases', 'https://nexus.jsdu.cn/repository']
+
+function cleanroomMavenPath(version: string, file: string): string {
+  return `com/cleanroommc/cleanroom/${version}/${file}`
+}
+
+/** Cleanroom 的版本列表（读 maven-metadata.xml，和 NeoForge 一个套路） */
+async function cleanroomVersions(): Promise<string[]> {
+  const urls = CLEANROOM_REPOS.map((r) => `${r}/com/cleanroommc/cleanroom/maven-metadata.xml`)
+  let xml = ''
+  let lastErr: unknown
+  for (let i = 1; i <= 3 && !xml; i++) {
+    xml = await fetchTextAny(urls, 25_000).catch((e) => {
+      lastErr = e
+      return ''
+    })
+    if (!xml && i < 3) await new Promise((r) => setTimeout(r, 600 * i))
+  }
+  if (!xml) throw new Error(`拉取 Cleanroom 版本列表失败：${(lastErr as Error)?.message ?? '网络错误'}`)
+  return [...xml.matchAll(/<version>([^<]+)<\/version>/g)].map((m) => m[1]).filter(Boolean)
+}
+
 const loaderVersionCache = new Map<string, { at: number; data: LoaderOption[] }>()
 const LOADER_TTL = 30 * 60 * 1000
 
@@ -239,6 +286,19 @@ export async function listLoaderVersions(loader: LoaderType, mcVersion: string):
       .filter((v) => v.startsWith(prefix + '.') || v.startsWith(prefix + '-'))
       .reverse()
       .map((v) => ({ value: v, label: v }))
+  } else if (loader === 'legacyfabric') {
+    const artifacts = await legacyFabricArtifacts(mcVersion)
+    data = artifacts
+      .map((a) => ({ value: a.loader.version, label: a.loader.version, stable: a.loader.stable }))
+      .sort((a, b) => (a.stable === b.stable ? 0 : a.stable ? -1 : 1))
+  } else if (loader === 'cleanroom') {
+    // Cleanroom 只跑 1.12.2：别的版本给了也装不上，干脆不给
+    if (mcVersion === '1.12.2') {
+      const all = await cleanroomVersions()
+      data = all
+        .reverse()
+        .map((v) => ({ value: v, label: v, stable: !/-(alpha|beta|pre|snapshot)/i.test(v) }))
+    }
   }
 
   if (data.length) loaderVersionCache.set(cacheKey, { at: Date.now(), data })
@@ -256,6 +316,9 @@ export function loaderTargetVersionId(loader: LoaderType, mcVersion: string, loa
   if (loader === 'quilt') return `quilt-loader-${loaderVersion}-${mcVersion}`
   if (loader === 'neoforge') return `neoforge-${loaderVersion}`
   if (loader === 'forge') return `${mcVersion}-forge-${loaderVersion}`
+  // 加前缀是为了不和官方 Fabric 的 fabric-loader-x-y 撞名（两个加载器的库完全不一样）
+  if (loader === 'legacyfabric') return `legacyfabric-loader-${loaderVersion}-${mcVersion}`
+  if (loader === 'cleanroom') return `cleanroom-${loaderVersion}`
   return mcVersion
 }
 
@@ -280,7 +343,243 @@ const LOADER_NAME: Record<string, string> = {
   fabric: 'Fabric',
   forge: 'Forge',
   neoforge: 'NeoForge',
-  quilt: 'Quilt'
+  quilt: 'Quilt',
+  legacyfabric: 'Legacy Fabric',
+  cleanroom: 'Cleanroom'
+}
+
+/* --------------------------- Legacy Fabric / Cleanroom --------------------------- */
+
+export interface RawLibraryLike {
+  name?: string
+  url?: string
+  downloads?: {
+    artifact?: { path?: string; url?: string }
+    classifiers?: Record<string, { path?: string; url?: string }>
+  }
+}
+
+/**
+ * 把「有 downloads.artifact 但 url 是空字符串」的库补上地址。
+ *
+ * Cleanroom 的 version.json 里 com.cleanroommc:cleanroom 那条就是这样（它指望安装器
+ * 按 install_profile 的 repositories 去填）；@xmcl 遇到空 url 会默认当成
+ * libraries.minecraft.net，装完就是 404 —— 所以必须自己按 group 前缀挑仓库。
+ *
+ * 顺手把 classifiers 里缺 path 的补上（路径能从坐标算出来）。
+ */
+export function fixLibraryDownloads(
+  libs: RawLibraryLike[],
+  repositories: Record<string, string>
+): { urlFixed: number; pathFixed: number } {
+  const repos = Object.entries(repositories).sort((a, b) => b[0].length - a[0].length)
+  let urlFixed = 0
+  let pathFixed = 0
+  for (const lib of libs) {
+    const art = lib.downloads?.artifact
+    if (art && !art.url) {
+      const group = (lib.name ?? '').split(':')[0]
+      const repo = repos.find(([prefix]) => group === prefix || group.startsWith(prefix + '.'))?.[1]
+      if (repo) {
+        art.url = `${repo.replace(/\/+$/, '')}/${art.path ?? ''}`
+        urlFixed++
+      }
+    }
+    for (const [classifier, cls] of Object.entries(lib.downloads?.classifiers ?? {})) {
+      if (!fillClassifierPath(cls, lib.name, classifier)) continue
+      pathFixed++
+    }
+  }
+  return { urlFixed, pathFixed }
+}
+
+function fillClassifierPath(cls: { path?: string }, name: string | undefined, classifier: string): boolean {
+  if (cls.path || !name) return false
+  const rel = libraryRelPath(`${name}:${classifier}`)
+  if (!rel) return false
+  cls.path = rel
+  return true
+}
+
+/** 版本 json 原子落盘（先写 .part 再改名，中途断了不会留半个坏 json） */
+async function writeVersionJson(gameDir: string, versionId: string, json: unknown): Promise<string> {
+  const dir = path.join(gameDir, 'versions', versionId)
+  await fs.promises.mkdir(dir, { recursive: true })
+  const file = path.join(dir, `${versionId}.json`)
+  await fs.promises.writeFile(`${file}.part`, JSON.stringify(json), 'utf-8')
+  await fs.promises.rename(`${file}.part`, file)
+  return file
+}
+
+/**
+ * 失败了也得报一次终态进度。
+ * 否则进度条会永远停在「下载依赖库」那一格上转圈，用户以为还在装。
+ */
+async function runWithTerminalProgress(
+  key: string,
+  name: string,
+  total: number,
+  onProgress: ProgressFn | undefined,
+  run: () => Promise<string>
+): Promise<string> {
+  try {
+    return await run()
+  } catch (e) {
+    onProgress?.({
+      key,
+      phase: `${name} 安装失败：${(e as Error).message}`,
+      current: total,
+      total,
+      done: true
+    })
+    throw e
+  }
+}
+
+/**
+ * Legacy Fabric 官方 profile json → 我们的版本 json（纯函数，方便单测）。
+ * 它给的 id 是 fabric-loader-x-y，会跟官方 Fabric 撞名；改名并挂在原版下面继承。
+ */
+export function makeLegacyFabricVersionJson(
+  profile: Record<string, unknown>,
+  versionId: string,
+  mcVersion: string
+): Record<string, unknown> {
+  return { ...profile, id: versionId, inheritsFrom: mcVersion, type: 'release' }
+}
+
+async function installLegacyFabric(
+  mcVersion: string,
+  loaderVersion: string,
+  gameDir: string,
+  onProgress?: ProgressFn
+): Promise<string> {
+  const key = `install-${instanceKey(gameDir)}`
+  const versionId = loaderTargetVersionId('legacyfabric', mcVersion, loaderVersion)
+  onProgress?.({ key, phase: `获取 Legacy Fabric ${loaderVersion} 版本信息`, current: 0, total: 2 })
+
+  const url = `${LEGACY_FABRIC_META}/versions/loader/${encodeURIComponent(mcVersion)}/${encodeURIComponent(
+    loaderVersion
+  )}/profile/json`
+  let profile: Record<string, unknown> | undefined
+  let lastErr: unknown
+  for (let i = 1; i <= 3 && !profile; i++) {
+    try {
+      profile = await fetchJsonAny<Record<string, unknown>>([url], 30_000)
+    } catch (e) {
+      lastErr = e
+      if (i < 3) await new Promise((r) => setTimeout(r, 800 * i))
+    }
+  }
+  if (!profile) throw new Error(`Legacy Fabric 版本信息拉不下来：${(lastErr as Error)?.message ?? '网络错误'}`)
+
+  // 官方给的 json 里 id 是 fabric-loader-x-y，会跟官方 Fabric 撞名；改成我们自己的，并挂在原版下面
+  await writeVersionJson(gameDir, versionId, makeLegacyFabricVersionJson(profile, versionId, mcVersion))
+
+  onProgress?.({ key, phase: '下载 Legacy Fabric 依赖库', current: 1, total: 2 })
+  const resolved = await Version.parse(gameDir, versionId)
+  const errors = await installResolvedGame(resolved, gameDir, onProgress)
+  if (errors.length) throw new Error(`Legacy Fabric 依赖下载失败 ${errors.length} 个：${errors[0]}`)
+  onProgress?.({ key, phase: 'Legacy Fabric 安装完成', current: 2, total: 2, done: true })
+  return versionId
+}
+
+/**
+ * Cleanroom installer 里的两份 json → 我们的版本 json（纯函数，方便单测）。
+ *
+ * version.json 是自包含的完整版本（自带 1.12.2 的 client/downloads/assetIndex，自己的
+ * minecraftArguments 里已经有 --tweakClass FMLTweaker，javaVersion 是 25），所以：
+ * · 只补那个空 download url；
+ * · 改成我们的 id；
+ * · **不能**加 inheritsFrom —— @xmcl 合并 legacy 版本时会把父子两边的 minecraftArguments
+ *   拼在一起，参数会重复一遍。
+ */
+export function makeCleanroomVersionJson(
+  profile: { repositories?: Record<string, string> },
+  versionJson: Record<string, unknown> & { libraries?: RawLibraryLike[] },
+  versionId: string
+): {
+  json: Record<string, unknown>
+  urlFixed: number
+  pathFixed: number
+  libraries: number
+} {
+  const finalJson: Record<string, unknown> & { libraries?: RawLibraryLike[] } = {
+    ...versionJson,
+    id: versionId,
+    type: 'release'
+  }
+  delete finalJson.inheritsFrom
+  const { urlFixed, pathFixed } = fixLibraryDownloads(finalJson.libraries ?? [], profile.repositories ?? {})
+  return { json: finalJson, urlFixed, pathFixed, libraries: finalJson.libraries?.length ?? 0 }
+}
+
+/**
+ * 装 Cleanroom。
+ *
+ * 不走官方安装器（它的 processors 是空的，压根没东西要处理）：直接把 installer jar 里的
+ * version.json 掏出来用。
+ */
+async function installCleanroom(
+  mcVersion: string,
+  loaderVersion: string,
+  gameDir: string,
+  onProgress?: ProgressFn
+): Promise<string> {
+  const key = `install-${instanceKey(gameDir)}`
+  const versionId = loaderTargetVersionId('cleanroom', mcVersion, loaderVersion)
+  const installer = path.join(gameDir, '.installers', `cleanroom-${loaderVersion}-installer.jar`)
+
+  onProgress?.({ key, phase: `下载 Cleanroom ${loaderVersion} 安装包`, current: 0, total: 3 })
+  await downloadFile(
+    CLEANROOM_REPOS.map((r) => `${r}/${cleanroomMavenPath(loaderVersion, `cleanroom-${loaderVersion}-installer.jar`)}`),
+    installer,
+    undefined,
+    { skipIfExists: false }
+  )
+
+  const profileBytes = readFileInsideZip(installer, 'install_profile.json')
+  const versionBytes = readFileInsideZip(installer, 'version.json')
+  if (!profileBytes || !versionBytes) {
+    throw new Error('Cleanroom 安装包里没找到 install_profile.json / version.json（下载可能不完整，重试一次）')
+  }
+  const profile = JSON.parse(profileBytes.toString('utf-8')) as {
+    minecraft?: string
+    repositories?: Record<string, string>
+    java?: { minimum?: number; recommended?: number }
+  }
+  const json = JSON.parse(versionBytes.toString('utf-8')) as {
+    id?: string
+    arguments?: unknown
+    libraries?: RawLibraryLike[]
+    javaVersion?: { majorVersion?: number }
+  }
+  if (json.arguments) {
+    throw new Error('这个 Cleanroom 版本用的是新式 arguments 格式，本启动器还不支持（请换 0.7.x）')
+  }
+
+  // Cleanroom 要 Java 25：官方运行时清单只到 21，交给 ensureJava 走 Adoptium
+  const needJava = profile.java?.recommended ?? profile.java?.minimum ?? 25
+  onProgress?.({ key, phase: `准备 Java ${needJava}（Cleanroom 需要）`, current: 0, total: 3 })
+  await ensureJava(mcVersion, undefined, undefined, needJava)
+
+  // 自带的 javaVersion（25）要保留：启动时靠它决定用哪个 Java；inheritsFrom 一定不能加
+  const { json: finalJson, urlFixed, pathFixed, libraries: libCount } = makeCleanroomVersionJson(
+    profile,
+    json,
+    versionId
+  )
+  if (urlFixed || pathFixed) {
+    console.log(`[WFMC] Cleanroom：补了 ${urlFixed} 个下载地址、${pathFixed} 个 natives 路径`)
+  }
+  await writeVersionJson(gameDir, versionId, finalJson)
+
+  onProgress?.({ key, phase: `下载 Cleanroom 依赖库（${libCount} 个）`, current: 1, total: 3 })
+  const resolved = await Version.parse(gameDir, versionId)
+  const errors = await installResolvedGame(resolved, gameDir, onProgress)
+  if (errors.length) throw new Error(`Cleanroom 依赖下载失败 ${errors.length} 个：${errors[0]}`)
+  onProgress?.({ key, phase: `Cleanroom ${loaderVersion} 安装完成`, current: 3, total: 3, done: true })
+  return versionId
 }
 
 /** 安装加载器，返回可启动的版本 id */
@@ -306,7 +605,21 @@ export async function installLoader(
     return reusable
   }
 
-  const java = await ensureJava(mcVersion)
+  // Cleanroom 要 Java 25（官方清单只到 21），由 installCleanroom 自己按 install_profile 的
+  // java.minimum 去 ensureJava；其余加载器照旧先确保有一个够新的 Java 能跑安装器
+  const java = loader === 'cleanroom' ? '' : await ensureJava(mcVersion)
+
+  if (loader === 'legacyfabric') {
+    return runWithTerminalProgress(key, `Legacy Fabric ${loaderVersion}`, 2, onProgress, () =>
+      installLegacyFabric(mcVersion, loaderVersion, gameDir, onProgress)
+    )
+  }
+
+  if (loader === 'cleanroom') {
+    return runWithTerminalProgress(key, `Cleanroom ${loaderVersion}`, 3, onProgress, () =>
+      installCleanroom(mcVersion, loaderVersion, gameDir, onProgress)
+    )
+  }
 
   if (loader === 'fabric') {
     onProgress?.({ key, phase: `安装 Fabric ${loaderVersion}`, current: 0, total: 2 })

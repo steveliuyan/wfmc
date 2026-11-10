@@ -9,8 +9,14 @@ interface Walked {
   partial: boolean
 }
 
-/** 递归量一个目录的大小（超时就先返回，partial=true） */
-async function walkSize(dir: string, deadline: number, filter?: (file: string) => boolean): Promise<Walked> {
+/** 递归量一个目录的大小（超时就先返回，partial=true）。
+ * 传 seen 会按 inode 去重：硬链接在各个实例里只算一次，否则去重之后占用会被算成好几倍。 */
+async function walkSize(
+  dir: string,
+  deadline: number,
+  filter?: (file: string) => boolean,
+  seen?: Set<string>
+): Promise<Walked> {
   let bytes = 0
   let files = 0
   let partial = false
@@ -31,7 +37,13 @@ async function walkSize(dir: string, deadline: number, filter?: (file: string) =
       else if (e.isFile()) {
         if (filter && !filter(p)) continue
         try {
-          bytes += (await fs.promises.stat(p)).size
+          const st = await fs.promises.stat(p)
+          if (seen && st.nlink > 1) {
+            const key = `${st.dev}:${st.ino}`
+            if (seen.has(key)) continue
+            seen.add(key)
+          }
+          bytes += st.size
           files++
         } catch {
           /* 读不到就算了 */
@@ -57,7 +69,12 @@ export async function dataUsage(dataDir: string, budgetMs = 4000): Promise<DiskU
   const items: UsageItem[] = []
 
   const instancesDir = path.join(dataDir, 'instances')
-  const inst = exists(instancesDir) ? await walkSize(instancesDir, deadline) : { bytes: 0, files: 0, partial: false }
+  // 硬链接去重之后，同一份 jab 会在多个实例里各有一个目录项：按 inode 只算一次，
+  // 否则「实例与游戏文件」会把去重省下的那部分重复算进去
+  const seen = new Set<string>()
+  const inst = exists(instancesDir)
+    ? await walkSize(instancesDir, deadline, undefined, seen)
+    : { bytes: 0, files: 0, partial: false }
   items.push({
     key: 'instances',
     label: '实例与游戏文件',
@@ -68,6 +85,22 @@ export async function dataUsage(dataDir: string, budgetMs = 4000): Promise<DiskU
     hint: '删了就得重新下载，只能一个个实例删',
     inTotal: true
   })
+
+  // 内容仓库：共享用的那份底本，字节数已经算在上面（按 inode 去重），这里只报个数
+  const blobsDir = path.join(dataDir, 'blobs')
+  if (exists(blobsDir)) {
+    const bl = await walkSize(blobsDir, deadline)
+    items.push({
+      key: 'blobs',
+      label: '共享内容仓库',
+      path: blobsDir,
+      bytes: bl.bytes,
+      files: bl.files,
+      cleanable: false,
+      hint: '硬链接去重的底本，已包含在上面「实例与游戏文件」里，不重复计入合计',
+      inTotal: false
+    })
+  }
 
   const downloadsDir = path.join(dataDir, 'downloads')
   const dl = exists(downloadsDir) ? await walkSize(downloadsDir, deadline) : { bytes: 0, files: 0, partial: false }

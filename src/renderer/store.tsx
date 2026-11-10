@@ -44,6 +44,16 @@ interface Ctx {
     cancelText?: string
     danger?: boolean
   }) => Promise<boolean>
+  /** 带动效的输入框（替代原生 prompt）；取消返回 undefined，确定返回去掉首尾空格的文本 */
+  askPrompt: (opts: {
+    title?: string
+    message?: string
+    defaultValue?: string
+    placeholder?: string
+    okText?: string
+    cancelText?: string
+    maxLength?: number
+  }) => Promise<string | undefined>
 }
 
 const LauncherContext = createContext<Ctx>(null as never)
@@ -87,6 +97,16 @@ export function LauncherProvider({ children }: { children: React.ReactNode }) {
     resolve: (ok: boolean) => void
   }>()
   const toastSeq = useRef(0)
+  const [prompt, setPrompt] = useState<{
+    title?: string
+    message?: string
+    placeholder?: string
+    okText: string
+    cancelText: string
+    maxLength: number
+    resolve: (v: string | undefined) => void
+  }>()
+  const [promptText, setPromptText] = useState('')
 
   const askConfirm = (opts: {
     title?: string
@@ -109,8 +129,32 @@ export function LauncherProvider({ children }: { children: React.ReactNode }) {
       })
     })
 
-  const toast = useCallback((message: string, type: Toast['type'] = 'info') => {
-    const id = ++toastSeq.current
+  const askPrompt = (opts: {
+    title?: string
+    message?: string
+    defaultValue?: string
+    placeholder?: string
+    okText?: string
+    cancelText?: string
+    maxLength?: number
+  }): Promise<string | undefined> =>
+    new Promise<string | undefined>((resolve) => {
+      setPromptText(opts.defaultValue ?? '')
+      setPrompt({
+        title: opts.title,
+        message: opts.message,
+        placeholder: opts.placeholder,
+        okText: opts.okText ?? '确定',
+        cancelText: opts.cancelText ?? '取消',
+        maxLength: opts.maxLength ?? 40,
+        resolve: (v) => {
+          setPrompt(undefined)
+          resolve(v)
+        }
+      })
+    })
+
+  const toast = useCallback((message: string, type: Toast['type'] = 'info') => {    const id = ++toastSeq.current
     setToasts((prev) => [...prev, { id, type, message }])
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), type === 'error' ? 8000 : 4000)
   }, [])
@@ -309,7 +353,8 @@ export function LauncherProvider({ children }: { children: React.ReactNode }) {
     toast,
     clearLogs,
     clearProgress,
-    askConfirm
+    askConfirm,
+    askPrompt
   }
 
   return (
@@ -337,6 +382,40 @@ export function LauncherProvider({ children }: { children: React.ReactNode }) {
                 onClick={() => dialog.resolve(true)}
               >
                 {dialog.okText}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {prompt && (
+        <div
+          className="dialog-mask"
+          onClick={() => prompt.resolve(undefined)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') prompt.resolve(undefined)
+          }}
+        >
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="dialog-title">{prompt.title ?? '输入一下'}</div>
+            {prompt.message && <div className="dialog-body">{prompt.message}</div>}
+            <input
+              className="rename-input prompt-input"
+              autoFocus
+              maxLength={prompt.maxLength}
+              value={promptText}
+              placeholder={prompt.placeholder}
+              onChange={(e) => setPromptText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') prompt.resolve(promptText.trim())
+                else if (e.key === 'Escape') prompt.resolve(undefined)
+              }}
+            />
+            <div className="dialog-actions">
+              <button className="btn" onClick={() => prompt.resolve(undefined)}>
+                {prompt.cancelText}
+              </button>
+              <button className="btn primary" onClick={() => prompt.resolve(promptText.trim())}>
+                {prompt.okText}
               </button>
             </div>
           </div>

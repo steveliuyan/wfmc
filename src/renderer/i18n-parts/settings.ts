@@ -173,6 +173,13 @@ export const PAIRS: [string, string][] = [
   ['共', 'Total'],
   ['个', ''],
 
+  // 重复文件去重（硬链接）
+  ['重复文件去重', 'Duplicate file dedupe'],
+  ['模组、资源包、光影按内容共享一份，多个实例不再各存一遍', 'Mods, resource packs and shaders are shared by content, so multiple instances never store them twice'],
+  ['算一下省了多少', 'Measure savings'],
+  ['立即去重', 'Dedupe now'],
+  ['清理孤立文件', 'Clean orphaned files'],
+
   // Java
   ['1.20.5+ 要 Java 21，1.18–1.20.4 要 Java 17，1.17 要 16，更老的版本用 Java 8。留空时启动器会按版本自动挑。', '1.20.5+ needs Java 21, 1.18–1.20.4 needs Java 17, 1.17 needs 16 and older versions need Java 8. Leave it blank and the launcher picks per version.'],
   ['已检测到的 Java', 'Detected Java'],
@@ -249,5 +256,26 @@ export const PAIRS: [string, string][] = [
   // 设置与外壳遗漏（App.tsx / Settings.tsx 拼接片段）
   ['，可在「设置 → 检查更新」查看', ', check Settings → Check for Updates'],
   ['以上（超时没走完）', 'or more (timed out)'],
-  ['，账号已备份成 .bak', ', accounts backed up as .bak']
+  ['，账号已备份成 .bak', ', accounts backed up as .bak'],
+
+  // AI 助手（MCP）：设置里的分区 + 确认弹层
+  ['AI 助手', 'AI assistant'],
+  ['AI 助手（MCP）', 'AI assistant (MCP)'],
+  ['让 Claude Desktop 这类 AI 客户端直接操作启动器：查实例、开游戏、装整合包。', 'Let AI clients such as Claude Desktop drive the launcher directly: list instances, launch the game, install modpacks.'],
+  ['接口只监听本机 127.0.0.1，还要一次性令牌；每做一件会改动东西的事，都会先弹窗问你。', 'The endpoint only listens on 127.0.0.1 and requires a one-time token; anything that changes your setup asks you first.'],
+  ['允许 AI 助手连接', 'Let the AI assistant connect'],
+  ['关掉之后本机接口立刻停掉，客户端再调会连不上；下次打开启动器也不会自己开', 'Turning this off stops the local endpoint at once, so clients can no longer reach it, and it stays off next time.'],
+  ['不再逐次确认', 'Skip per-action confirmation'],
+  ['打开后 AI 的写操作（启动游戏、装东西）不再弹窗，直接执行。只在你盯着 AI 干活时打开，否则等于把启动器完全交出去', 'With this on, the AI launches the game and installs things without asking. Only enable it while you are watching; otherwise you are handing over the launcher.'],
+  ['接口还没起来（主进程没启动完，或者端口被占了），点「刷新」再看看。', 'The endpoint is not up yet (still starting, or the port is taken). Hit Refresh in a moment.'],
+  ['现在是关着的，打开上面的开关才会起接口。', 'It is off right now; turn the switch above on to start the endpoint.'],
+  ['复制配置', 'Copy config'],
+  ['已复制，粘到 AI 客户端的配置里就行', 'Copied - paste it into your AI client config'],
+  ['复制失败，可以手动选中下面的文字复制', 'Copy failed - select the text below and copy it manually'],
+  ['AI 助手想做一件事', 'The AI assistant wants to do something'],
+  ['允许这一次就会真的动手；不放心就点「拒绝」，AI 会收到「用户拒绝了这次操作」。', 'Allowing really does it; if unsure, deny and the AI is told the user refused.'],
+  ['想省事点「本会话都允许」，只对这一个操作生效，关掉启动器就忘了。', 'Or allow for this session - it covers only this tool and is forgotten when the launcher closes.'],
+  ['拒绝', 'Deny'],
+  ['本会话都允许', 'Allow for this session'],
+  ['MCP', 'MCP']
 ]

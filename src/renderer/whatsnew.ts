@@ -14,6 +14,14 @@ const SEEN_KEY = 'whatsNewSeen'
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '1.3.4',
+    items: [
+      '新增 Legacy Fabric、Cleanroom 两个加载器：1.12.2 的老 Fabric 整合包能装了，Cleanroom 会自动下 Java 25。',
+      '设置里多了「AI 助手」：打开后复制配置粘进 Claude Desktop，AI 就能帮你开游戏、装整合包、看启动日志；会改东西的操作都会先弹窗问你。',
+      '弹窗不再叠在一起：更新公告、新手引导、弹窗通知按顺序一次弹一个，新装用户首次打开也不会连弹四个。'
+    ]
+  },
+  {
     version: '1.3.0',
     items: [
       '存档工坊改成灰度默认关：要用先在「设置 → 界面与行为」里打开；不开也能看存档列表和体检，只是不能改。',

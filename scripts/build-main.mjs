@@ -38,4 +38,19 @@ await build({
   logLevel: 'info'
 })
 
+// MCP stdio 端：单独一个 bundle，不能打进主进程（主进程被 spawn 时读不到 stdin）
+await build({
+  ...common,
+  bundle: true,
+  entryPoints: ['src/main/mcp-stdio.ts'],
+  outfile: 'dist/main/mcp-stdio.js',
+  platform: 'node',
+  format: 'cjs',
+  target: 'node20',
+  external: ['electron'],
+  packages: 'external',
+  sourcemap: false,
+  logLevel: 'info'
+})
+
 console.log('[build-main] done')

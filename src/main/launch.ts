@@ -28,6 +28,35 @@ interface Running {
 
 const running = new Map<string, Running>()
 
+/**
+ * 每个实例最近的一份启动日志。
+ *
+ * 渲染层那份是流式的（`event:launch-log` 发完就没了），AI 助手通过 MCP 问「刚才启动失败
+ * 报了什么错」的时候，需要能回头读。环形覆盖，最多留 LOG_CAP 行，不占内存也不无限涨。
+ */
+const LOG_CAP = 600
+const launchLogs = new Map<string, string[]>()
+
+/** 记一行启动日志（给 getLaunchLog / MCP 用） */
+export function appendLaunchLog(instanceId: string, line: string) {
+  const arr = launchLogs.get(instanceId) ?? []
+  arr.push(line)
+  if (arr.length > LOG_CAP) arr.splice(0, arr.length - LOG_CAP)
+  launchLogs.set(instanceId, arr)
+}
+
+/** 取某实例最近的启动日志（默认 120 行） */
+export function getLaunchLog(instanceId: string, lines = 120): string[] {
+  const arr = launchLogs.get(instanceId) ?? []
+  const want = Math.max(1, Math.min(Math.floor(lines) || 120, LOG_CAP))
+  return arr.slice(Math.max(0, arr.length - want))
+}
+
+/** 清掉某实例的日志缓冲（每次启动重新记，免得上一局的报错混进来） */
+export function clearLaunchLog(instanceId: string) {
+  launchLogs.delete(instanceId)
+}
+
 export function isRunning(instanceId: string) {
   return running.has(instanceId)
 }
@@ -82,8 +111,15 @@ export async function launchInstance(
   onLog: LogFn,
   onState: StateFn
 ): Promise<void> {
+  // 所有日志都先记进环形缓冲，AI / 诊断包要能回头读（渲染层那份是流式的，读过就没了）
+  const log: LogFn = (id, line) => {
+    appendLaunchLog(id, line)
+    onLog(id, line)
+  }
+
   const instance = store.getInstance(req.instanceId)
   if (!instance) throw new Error('实例不存在')
+  clearLaunchLog(instance.id)
   const account =
     store.accounts.find((a) => a.id === (req.accountId ?? store.settings.activeAccountId)) ?? store.accounts[0]
   if (!account) throw new Error('还没有账号，请在设置里添加一个离线账号')
@@ -100,7 +136,7 @@ export async function launchInstance(
     } catch {
       /* 写不进去也照样启动 */
     }
-    onLog(
+    log(
       instance.id,
       `[WFMC] 实例里存的版本是 ${wanted}，但${instance.loader !== 'vanilla' ? ` ${instance.loader} ${instance.loaderVersion ?? ''}` : ''} 装的是 ${versionId}，已按后者启动（模组才会加载）`
     )
@@ -115,15 +151,15 @@ export async function launchInstance(
   const javaPath = await ensureJava(
     instance.mcVersion,
     instance.javaPath || settings.javaPath,
-    (l) => onLog(instance.id, l),
+    (l) => log(instance.id, l),
     needMajor
   )
-  onLog(instance.id, `[WFMC] 使用 Java: ${javaPath}（这个版本要 Java ${needMajor}）`)
-  onLog(instance.id, `[WFMC] 游戏目录: ${gameDir}`)
+  log(instance.id, `[WFMC] 使用 Java: ${javaPath}（这个版本要 Java ${needMajor}）`)
+  log(instance.id, `[WFMC] 游戏目录: ${gameDir}`)
 
   // 新实例第一次启动默认是英文界面，这里先把 lang 写成中文（已经有的不动）
   const langState = ensureGameLanguage(gameDir)
-  if (langState !== 'kept') onLog(instance.id, '[WFMC] 已把游戏语言设为简体中文（options.txt）')
+  if (langState !== 'kept') log(instance.id, '[WFMC] 已把游戏语言设为简体中文（options.txt）')
   // 启动前自动打一份存档快照：游戏崩了/世界废了还能回滚（设置里可关）
   if (settings.autoBackupSaves !== false) {
     try {
@@ -133,24 +169,24 @@ export async function launchInstance(
         const bk = backupSaves(instance.id, { kind: 'launch' })
         if (bk) {
           pruneSaveBackups(instance.id)
-          onLog(
+          log(
             instance.id,
             `[WFMC] 启动前已备份存档：${path.basename(bk.file)}（${bk.worlds.length} 个世界 / ${bk.files} 个文件）`
           )
         }
       }
     } catch (e) {
-      onLog(instance.id, `[WFMC] 存档备份失败（不影响启动）：${e instanceof Error ? e.message : String(e)}`)
+      log(instance.id, `[WFMC] 存档备份失败（不影响启动）：${e instanceof Error ? e.message : String(e)}`)
     }
   }
-  onLog(
+  log(
     instance.id,
     `[WFMC] 版本: ${versionId}${instance.loader !== 'vanilla' ? ` (${instance.loader} ${instance.loaderVersion ?? ''})` : ''}`
   )
 
   // 自己解压 natives：内置的 LaunchPrecheck.checkNatives 在当前锁定的 unzip 版本下会死锁
   const folder = new MinecraftFolder(resourceDir)
-  onLog(instance.id, '[WFMC] 解压 native 库…')
+  log(instance.id, '[WFMC] 解压 native 库…')
   await ensureNatives(folder, resolved)
 
   // 原版实例里放模组是没用的：原版客户端不加载 mods 目录，得先装加载器
@@ -164,7 +200,7 @@ export async function launchInstance(
       /* 没有 mods 目录就是 0 */
     }
     if (modCount > 0) {
-      onLog(
+      log(
         instance.id,
         `[WFMC] 注意：这是原版（vanilla）实例，mods 里的 ${modCount} 个模组不会被加载；要玩模组得先给这个实例装 Fabric / Forge / NeoForge 加载器。`
       )
@@ -182,12 +218,12 @@ export async function launchInstance(
         const { issues } = diagnoseMods(instance.id)
         const bad = issues.find((i) => i.title.startsWith('加载器不匹配'))
         if (bad) {
-          onLog(instance.id, `[WFMC] 注意：${bad.detail}`)
+          log(instance.id, `[WFMC] 注意：${bad.detail}`)
         }
         // 缺前置 / 前置被禁用：游戏里只会弹一句「模组不兼容」，这里提前说清楚
         const dep = issues.find((i) => (i.enableFiles && i.enableFiles.length > 0) || i.fixDep)
         if (dep) {
-          onLog(instance.id, `[WFMC] 注意：${dep.title}（到「内容管理 → 体检模组」可以一键处理）`)
+          log(instance.id, `[WFMC] 注意：${dep.title}（到「内容管理 → 体检模组」可以一键处理）`)
         }
       }
     } catch {
@@ -222,8 +258,8 @@ export async function launchInstance(
     // 外置登录：把 authlib-injector 当 javaagent 注进去
     yggdrasilAgent: await (async () => {
       if (account.type !== 'yggdrasil' || !account.server) return undefined
-      const injector = await ensureInjector((p) => onLog(instance.id, `[WFMC] ${p.phase}`))
-      onLog(instance.id, `[WFMC] 外置登录：${account.server}`)
+      const injector = await ensureInjector((p) => log(instance.id, `[WFMC] ${p.phase}`))
+      log(instance.id, `[WFMC] 外置登录：${account.server}`)
       return { jar: injector.path, server: account.server }
     })(),
     extraExecOption: { cwd: gameDir },
@@ -255,11 +291,11 @@ export async function launchInstance(
     stopInstanceManifest(instance.id)
     void startInstanceManifest(instance.id, lanPort + 1).then((info) => {
       if (!info) {
-        onLog(instance.id, '[WFMC] 端口全被占用，没能共享模组清单（好友需要自己对齐 mod）')
+        log(instance.id, '[WFMC] 端口全被占用，没能共享模组清单（好友需要自己对齐 mod）')
         return
       }
       const ip = firstLanIp()
-      onLog(
+      log(
         instance.id,
         `[WFMC] 已共享模组清单：${ip || '<你的内网IP>'}:${info.port}（${info.mods} 个 mod）—— 好友用 WFMC 进服会自动补齐 mod`
       )
@@ -275,7 +311,7 @@ export async function launchInstance(
       buffer = lines.pop() ?? ''
       for (const line of lines) {
         if (!line.trim()) continue
-        onLog(instance.id, prefix + line)
+        log(instance.id, prefix + line)
         maybePublishLanManifest(line)
       }
     })
@@ -294,7 +330,7 @@ export async function launchInstance(
 
   const watcher = createMinecraftProcessWatcher(proc)
   watcher.on('minecraft-window-ready', () => {
-    onLog(instance.id, '[WFMC] 游戏窗口已出现')
+    log(instance.id, '[WFMC] 游戏窗口已出现')
     onState({ instanceId: instance.id, state: 'running', message: '运行中' })
   })
   watcher.on('error', (err: Error) => {
@@ -302,7 +338,7 @@ export async function launchInstance(
     running.delete(instance.id)
     stopInstanceManifest(instance.id)
     clearMyLanPort(instance.id)
-    onLog(instance.id, `[WFMC] 启动失败: ${err?.message ?? err}`)
+    log(instance.id, `[WFMC] 启动失败: ${err?.message ?? err}`)
     onState({ instanceId: instance.id, state: 'error', message: String(err?.message ?? err) })
   })
   watcher.on('minecraft-exit', (e: { code: number; signal: string; crashReport: string; crashReportLocation: string }) => {
@@ -312,11 +348,11 @@ export async function launchInstance(
     clearMyLanPort(instance.id)
     commitPlayTime()
     if (e.crashReport) {
-      onLog(instance.id, '[WFMC] 检测到崩溃报告，内容片段：')
-      onLog(instance.id, e.crashReport.split('\n').slice(0, 40).join('\n'))
-      if (e.crashReportLocation) onLog(instance.id, `[WFMC] 崩溃报告位置: ${e.crashReportLocation}`)
+      log(instance.id, '[WFMC] 检测到崩溃报告，内容片段：')
+      log(instance.id, e.crashReport.split('\n').slice(0, 40).join('\n'))
+      if (e.crashReportLocation) log(instance.id, `[WFMC] 崩溃报告位置: ${e.crashReportLocation}`)
     }
-    onLog(instance.id, `[WFMC] 游戏退出，代码 ${e.code}`)
+    log(instance.id, `[WFMC] 游戏退出，代码 ${e.code}`)
     onState({ instanceId: instance.id, state: 'exited', code: e.code })
   })
 }

@@ -247,6 +247,29 @@ function adoptExistingData(settings: Settings): boolean {
   return changed
 }
 
+/**
+ * 只读地算出「数据目录在哪」，不写任何文件。
+ *
+ * MCP 的 stdio 进程是被 AI 客户端拉起来的第二个 WFMC 进程，它绝不能调 `store.load()` ——
+ * load() 会把 settings.json 原样写回去，和正在跑的启动器抢同一个文件（谁后写谁赢）。
+ * 所以这里只做和 load() 一样的三条判断，纯读。
+ */
+export function readOnlyDataDir(): string {
+  try {
+    const portable = process.env.PORTABLE_EXECUTABLE_DIR
+    const root = portable ? path.join(portable, 'WFMC-Data') : app.getPath('userData')
+    const raw = readJson<Partial<Settings>>(path.join(root, 'settings.json'), {})
+    let dir = raw.dataDir
+    if (portable && !raw.dataDirCustom) {
+      // 便携版默认把数据放 exe 旁边；用户显式选了「用安装版那份数据」就指向 appData
+      dir = raw.useSharedData ? path.join(app.getPath('appData'), 'WFMC', 'data') : defaultDataDir()
+    }
+    return dir || defaultDataDir()
+  } catch {
+    return defaultDataDir()
+  }
+}
+
 class Store {
   private _settings: Settings = defaultSettings()
   private _accounts: Account[] = []

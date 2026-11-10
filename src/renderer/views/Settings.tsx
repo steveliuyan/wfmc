@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { api, formatSize, friendlyError } from '../api'
 import type { UpdateInfo } from '../api'
+import McpPanel from '../components/McpPanel'
 import { useLauncher, useT } from '../store'
-import type { DiskUsage, JavaInfo, ThemeMode } from '../../shared/types'
+import type { BlobStats, DiskUsage, JavaInfo, ThemeMode } from '../../shared/types'
 import { CREDITS, CREDIT_KIND_LABEL, type CreditKind } from '../../shared/credits'
 import Select from '../components/Select'
 import Disclaimer from './Disclaimer'
@@ -31,6 +32,7 @@ const RAIL: { id: string; label: string; icon: string }[] = [
   { id: 'java', label: 'Java 运行时', icon: '☕' },
   { id: 'accounts', label: '账号', icon: '👤' },
   { id: 'curseforge', label: 'CurseForge', icon: '🔑' },
+  { id: 'mcp', label: 'AI 助手', icon: '🤖' },
   { id: 'cloud', label: '云同步', icon: '☁' },
   { id: 'update', label: '更新', icon: '🔄' },
   { id: 'credits', label: '致谢', icon: '💖' },
@@ -82,6 +84,43 @@ export default function SettingsView() {
   // 占用明细（实例 / 下载 / 缓存 / 快照 / 日志），点按钮才走盘
   const [usage, setUsage] = useState<DiskUsage | null>(null)
   const [usageBusy, setUsageBusy] = useState(false)
+  // 硬链接去重（同一个 jar 在多个实例里只占一份）
+  const [blobs, setBlobs] = useState<BlobStats | null>(null)
+  const [dedupeBusy, setDedupeBusy] = useState(false)
+  const refreshBlobs = async () => {
+    setDedupeBusy(true)
+    try {
+      setBlobs(await api.blobStats())
+    } catch (e) {
+      toast(`统计失败：${(e as Error).message}`, 'error')
+    } finally {
+      setDedupeBusy(false)
+    }
+  }
+  const runDedupe = async () => {
+    setDedupeBusy(true)
+    try {
+      const r = await api.dedupeBlobs()
+      toast(`去重完成：新共享 ${r.linked} 个文件，省下 ${formatSize(r.bytes)}`, 'success')
+      setBlobs(await api.blobStats())
+    } catch (e) {
+      toast(`去重失败：${(e as Error).message}`, 'error')
+    } finally {
+      setDedupeBusy(false)
+    }
+  }
+  const runGcBlobs = async () => {
+    setDedupeBusy(true)
+    try {
+      const r = await api.gcBlobs()
+      toast(`清掉 ${r.files} 个孤立文件，腾出 ${formatSize(r.bytes)}`, 'success')
+      setBlobs(await api.blobStats())
+    } catch (e) {
+      toast(`清理失败：${(e as Error).message}`, 'error')
+    } finally {
+      setDedupeBusy(false)
+    }
+  }
   // 一键删除全部数据正在跑（按钮变灰，防止连点）
   const [wiping, setWiping] = useState(false)
   // 数据目录体检：放在安装目录里的话，更新安装包会把整份数据清掉（踩过：D:\WFMC\data 每次更新都没）
@@ -481,6 +520,30 @@ export default function SettingsView() {
                 </div>
               </div>
               <p className="set-note">语言目前覆盖导航 / 页面标题 / 主要按钮，正文文案仍在逐页补。</p>
+            </div>
+
+            <div className="set-block">
+              <div className="set-block-title">
+                <span>游玩总结分享卡</span>
+                <span className="muted small">退出游戏时弹一张 1080×1440 的战绩图</span>
+              </div>
+              <div className="chips">
+                <button
+                  className={`chip ${settings.shareSummary !== false ? 'on' : ''}`}
+                  onClick={() => saveSettings({ shareSummary: true })}
+                >
+                  弹出来（玩了 2 分钟以上才弹）
+                </button>
+                <button
+                  className={`chip ${settings.shareSummary === false ? 'on' : ''}`}
+                  onClick={() => saveSettings({ shareSummary: false })}
+                >
+                  不自动弹（还能去截图页手动做）
+                </button>
+              </div>
+              <p className="set-note">
+                卡片上的「以后不自动弹」也会记在这里，想再打开就选左边那个。
+              </p>
             </div>
           </section>
 
@@ -1092,10 +1155,34 @@ export default function SettingsView() {
                 </div>
               )}
             </div>
+{/* 硬链接去重：模组 / 资源包按内容共享一份，多个实例不再各存一遍 */}
+            <div className="set-block">
+              <div className="set-block-title">
+                <span>重复文件去重</span>
+                <span className="muted small">模组、资源包、光影按内容共享一份，多个实例不再各存一遍</span>
+              </div>
+              <div className="set-actions">
+                <button className="btn ghost sm" disabled={dedupeBusy} onClick={refreshBlobs}>
+                  {dedupeBusy ? '正在统计…' : blobs ? '重新统计' : '算一下省了多少'}
+                </button>
+                <button className="btn ghost sm" disabled={dedupeBusy} onClick={runDedupe}>
+                  立即去重
+                </button>
+                <button
+                  className="btn ghost sm"
+                  disabled={dedupeBusy || !blobs || blobs.orphans === 0}
+                  onClick={runGcBlobs}
+                >
+                  清理孤立文件
+                </button>
+              </div>
+              {blobs && !blobs.partial && (
+                <div className="muted small usage-hint">
+                  {`共 ${formatSize(blobs.bytes)} 内容，省下 ${formatSize(blobs.savedBytes)}；${blobs.links} 处引用复用，${blobs.orphans} 个孤立文件（${formatSize(blobs.orphanBytes)}）`}
+                </div>
+              )}
+            </div>
           </section>
-
-          
-                      {/* ── Java ────────────────────────────────── */}
           <section id="set-java" className="card set-card">
             <SetHead
               icon="☕"
@@ -1413,6 +1500,11 @@ export default function SettingsView() {
                     ? `当前已保存（尾号 ${settings.curseforgeApiKey.slice(-4)}）`
                     : '还没填。在 console.curseforge.com 免费申请，填完点「保存」。'}
             </p>
+          </section>
+
+          {/* ── AI 助手（MCP）：让外部 AI 客户端直连启动器 ── */}
+          <section id="set-mcp" className="card set-card">
+            <McpPanel />
           </section>
 
           {/* ── 云同步（自建服务端）：账号 + 备份在同一个分区里 ── */}

@@ -12,6 +12,7 @@ import type {
   SaveBackupKind
 } from '../shared/types'
 import { store } from './store'
+import { adopt, shareable } from './blobstore'
 import {
   zipDirectory,
   listZipEntries,
@@ -374,7 +375,10 @@ export function importContent(instanceId: string, kind: ContentKind, files: stri
   fs.mkdirSync(dir, { recursive: true })
   for (const file of files) {
     if (!fs.existsSync(file)) continue
-    fs.cpSync(file, path.join(dir, path.basename(file)), { recursive: true })
+    const dest = path.join(dir, path.basename(file))
+    fs.cpSync(file, dest, { recursive: true })
+    // 模组 / 资源包丢进来时顺手收进内容仓库：同一份东西换个实例再导入也不重复占空间
+    if (shareable(dest)) adopt(dest)
   }
   return listContent(instanceId, kind)
 }
@@ -708,6 +712,7 @@ export function importDatapack(instanceId: string, world: string, files: string[
   for (const file of files) {
     const dest = path.join(dir, path.basename(file))
     fs.copyFileSync(file, dest)
+    if (shareable(dest)) adopt(dest)
   }
   return listDatapacks(instanceId, world)
 }
@@ -955,6 +960,7 @@ export function importInstanceZip(zipPath: string): Instance {
     const dest = path.join(targetRoot, rel)
     fs.mkdirSync(path.dirname(dest), { recursive: true })
     fs.writeFileSync(dest, readZipEntry(buf, entry))
+    if (shareable(dest)) adopt(dest)
     count++
   }
 

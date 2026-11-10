@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import lottie, { type AnimationItem } from 'lottie-web'
 import { LauncherProvider, useLauncher } from './store'
-import { api, type AccountHealth, type SearchHit } from './api'
+import { api, type AccountHealth, type McpConsentRequest, type SearchHit } from './api'
 import type { NotifyItem } from '../shared/types'
 import { translate } from './i18n'
 import Select from './components/Select'
@@ -23,8 +23,9 @@ import SettingsView from './views/Settings'
 import Notify from './views/Notify'
 import NoticePopup from './views/NoticePopup'
 import WhatsNew from './components/WhatsNew'
-import { pendingWhatsNew } from './whatsnew'
+import { markWhatsNewSeen, pendingWhatsNew } from './whatsnew'
 import Tour from './components/Tour'
+import McpConsent from './components/McpConsent'
 import { tourSteps } from './tour-steps'
 import logoHorizontal from './assets/lottie-horizontal.json'
 import logoBadge from './assets/logo-badge.png'
@@ -193,8 +194,10 @@ function Onboarding() {
   }
 
   // 跳过：只记 onboarded，其它全用默认值
+  // 连新手讲解也一起记掉：点了「跳过」的人最不想接着被另一套引导再教一遍
+  // （讲解没丢，侧边栏那个 ? 按钮随时能重放）
   const skip = async () => {
-    await saveSettings({ onboarded: true })
+    await saveSettings({ onboarded: true, tourDone: true })
     toast('已跳过引导，随时可以在「设置」里改', 'success')
   }
 
@@ -323,13 +326,7 @@ function Shell() {
     void saveSettings({ tourDone: true })
   }, [saveSettings])
 
-  // 第一次进主界面（免责声明和基础引导都过了）自动放一遍新手引导
-  useEffect(() => {
-    if (!ready || !settings) return
-    if (!settings.disclaimerAccepted || !settings.onboarded || settings.tourDone) return
-    const timer = setTimeout(() => setTourOpen(true), 900)
-    return () => clearTimeout(timer)
-  }, [ready, settings])
+  // 新手引导的自动播放挪到下面「全屏弹层排队」那段统一处理（要和更新公告 / 弹窗通知抢先后）
   const activeAccount = accounts.find((x) => x.id === settings?.activeAccountId) ?? accounts[0]
   const acctType = (t?: string) => (t === 'microsoft' ? '正版' : t === 'yggdrasil' ? '外置' : '离线')
 
@@ -436,6 +433,12 @@ function Shell() {
   const [popupQueue, setPopupQueue] = useState<NotifyItem[]>([])
   // 升级公告：只在版本变了之后第一次打开时弹（内容写死在 whatsnew.ts，不走服务端）
   const [whatsNew, setWhatsNew] = useState(() => pendingWhatsNew())
+
+  // AI 助手（MCP）的写操作确认：主进程一个个推过来，排成队列一次问一件事
+  const [consentQueue, setConsentQueue] = useState<McpConsentRequest[]>([])
+  useEffect(() => {
+    return api.onMcpConsent((req) => setConsentQueue((q) => [...q, req]))
+  }, [])
   /** 本次运行里已经弹过的 id：同一条不会每分钟重复弹（重启后仍未读会再弹一次，符合「打开应用就弹」） */
   const poppedRef = useRef<Set<string>>(new Set())
   const [noticeSeen, setNoticeSeen] = useState<string[]>(() => {
@@ -540,6 +543,51 @@ function Shell() {
       clearInterval(timer)
     }
   }, [booted, loadNotices])
+
+  /**
+   * 新装用户不该看到「这次更新了什么」。
+   *
+   * 老逻辑是「版本号和 localStorage 里记的不一样就弹」，新用户 localStorage 是空的，
+   * 于是第一次打开先看到一份「v1.3.0 更新了啥」——他压根没用过上一个版本。
+   * 这里在「还没做过基础引导」时直接把最新一条标记成已读，静默跳过。
+   */
+  useEffect(() => {
+    if (!settings || !whatsNew) return
+    if (settings.onboarded) return
+    markWhatsNewSeen(whatsNew.version)
+    setWhatsNew(undefined)
+  }, [settings, whatsNew])
+
+  /**
+   * 全屏弹层排队：同一时刻只放一个。
+   *
+   * 之前这四个遮罩是各自独立判断的，新用户第一次打开会叠三层（更新公告压住基础引导、
+   * 点「跳过」又立刻蹦出服务端弹窗通知、新手讲解的两层遮罩也在下面），后面的层看起来
+   * 就是「糊的」。现在按优先级串起来：免责声明 → 首次引导 → 升级公告 → 新手讲解 → 弹窗通知。
+   */
+  const modal: 'disclaimer' | 'onboarding' | 'whatsnew' | 'tour' | 'notice' | undefined = !ready || !settings
+    ? undefined
+    : !settings.disclaimerAccepted
+      ? 'disclaimer'
+      : !settings.onboarded
+        ? 'onboarding'
+        : whatsNew
+          ? 'whatsnew'
+          : tourOpen
+            ? 'tour'
+            : popupQueue.length > 0
+              ? 'notice'
+              : undefined
+
+  // 第一次进主界面（免责声明和基础引导都过了、也没别的弹层）自动放一遍新手讲解
+  useEffect(() => {
+    if (modal !== undefined) return
+    if (!settings) return
+    if (!settings.disclaimerAccepted || !settings.onboarded || settings.tourDone) return
+    const timer = setTimeout(() => setTourOpen(true), 900)
+    return () => clearTimeout(timer)
+    // modal 变化才需要重新判断；tourOpen 一旦 true，modal 就不再是 undefined
+  }, [modal, settings])
 
   // 前端错误也记进本地日志（诊断包会带上）
   useEffect(() => {
@@ -962,19 +1010,22 @@ function Shell() {
         ))}
       </div>
 
-      {settings && !settings.disclaimerAccepted && (
+      {/* 四层遮罩按 modal 排队，同一时刻只渲染一个（多个叠在一起后面那层会显得发糊） */}
+      {modal === 'disclaimer' && (
         <Disclaimer
           mode="consent"
           onAgree={() => saveSettings({ disclaimerAccepted: true })}
         />
       )}
-      {settings && settings.disclaimerAccepted && !settings.onboarded && <Onboarding />}
+      {modal === 'onboarding' && <Onboarding />}
 
       <TaskPanel />
 
-      {whatsNew && <WhatsNew entry={whatsNew} onClose={() => setWhatsNew(undefined)} />}
+      {modal === 'whatsnew' && whatsNew && (
+        <WhatsNew entry={whatsNew} onClose={() => setWhatsNew(undefined)} />
+      )}
 
-      {popupQueue.length > 0 && (
+      {modal === 'notice' && popupQueue.length > 0 && (
         <NoticePopup
           item={popupQueue[0]}
           remaining={popupQueue.length}
@@ -983,7 +1034,12 @@ function Shell() {
         />
       )}
 
-      {tourOpen && <Tour steps={tourSteps} goto={(p) => setPage(p as PageId)} onClose={closeTour} />}
+      {modal === 'tour' && <Tour steps={tourSteps} goto={(p) => setPage(p as PageId)} onClose={closeTour} />}
+
+      {/* AI 助手要动手了：单独一层，不参与上面的 modal 排队，永远在最上面 */}
+      {consentQueue.length > 0 && (
+        <McpConsent req={consentQueue[0]} onDone={() => setConsentQueue((q) => q.slice(1))} />
+      )}
 
       {dropHint && (
         <div className="drop-overlay">

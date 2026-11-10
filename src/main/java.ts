@@ -415,6 +415,112 @@ export async function installJavaRuntime(
   return exe
 }
 
+/** 在目录里递归找 bin/java(.exe)：JDK 压缩包解开后通常只有一层（Windows 完全没有，mac 有两层 Contents/Home） */
+function findJavaExe(root: string, depth = 4): string | undefined {
+  const name = process.platform === 'win32' ? 'java.exe' : 'java'
+  const walk = (dir: string, left: number): string | undefined => {
+    const direct = path.join(dir, 'bin', name)
+    if (fs.existsSync(direct)) return direct
+    if (left <= 0) return undefined
+    let ents: fs.Dirent[] = []
+    try {
+      ents = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return undefined
+    }
+    for (const e of ents) {
+      if (!e.isDirectory()) continue
+      const hit = walk(path.join(dir, e.name), left - 1)
+      if (hit) return hit
+    }
+    return undefined
+  }
+  return walk(root, depth)
+}
+
+const ADOPTIUM_API = 'https://api.adoptium.net/v3'
+
+/**
+ * 从 Eclipse Temurin（Adoptium）下 JDK。
+ *
+ * 为什么单独开一条路：Mojang 官方运行时清单只到 Java 21（java-runtime-delta），
+ * Cleanroom 这类要求 Java 25 的加载器只能走 Adoptium。
+ */
+export async function installAdoptiumJdk(
+  major: number,
+  log?: (line: string) => void,
+  opts?: { signal?: AbortSignal; onBytes?: (done: number, total: number) => void }
+): Promise<string> {
+  const dest = path.join(store.javaDir, `temurin-${major}`)
+  const marker = path.join(dest, '.wfmc-partial')
+
+  const alive = findJavaExe(dest)
+  if (alive) {
+    const probe = await probeJava(alive)
+    if (probe.ok && (probe.major ?? 0) >= major) return alive
+    log?.(`[WFMC] 已有 temurin-${major} 但起不来（${probe.error ?? '版本不符'}），删掉重下`)
+    fs.rmSync(dest, { recursive: true, force: true })
+  } else if (fs.existsSync(dest) && !fs.existsSync(marker)) {
+    // 老版本留下的半拉目录
+    fs.rmSync(dest, { recursive: true, force: true })
+  }
+
+  const os = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : 'linux'
+  const arch = process.arch === 'arm64' ? 'aarch64' : process.arch === 'ia32' ? 'x86' : 'x64'
+  // Windows/mac 给 zip，Linux 给 tar.gz —— 两种系统 tar（Win10+ 自带 bsdtar）都能解
+  const ext = process.platform === 'linux' ? 'tar.gz' : 'zip'
+  const url = `${ADOPTIUM_API}/binary/latest/${major}/ga/${os}/${arch}/jdk/hotspot/normal/eclipse`
+  const archive = path.join(store.javaDir, `temurin-${major}.${ext}`)
+  const tmp = path.join(store.javaDir, `.temurin-${major}-unpack`)
+
+  log?.(`[WFMC] 正在下载 Java ${major}（Eclipse Temurin ${os}/${arch}，约 200MB）…`)
+  await fs.promises.mkdir(dest, { recursive: true })
+  await fs.promises.writeFile(marker, String(Date.now())).catch(() => undefined)
+  opts?.onBytes?.(0, 0)
+  await fetchToFile(url, archive, {}, 8, (m) => log?.(`[WFMC] ${m}`))
+  if (opts?.signal?.aborted) throw new AbortError('Java 下载已取消')
+  opts?.onBytes?.(1, 1)
+
+  log?.(`[WFMC] 正在解压 Java ${major}…`)
+  fs.rmSync(tmp, { recursive: true, force: true })
+  await fs.promises.mkdir(tmp, { recursive: true })
+  const un = await runProcess('tar', ['-xf', archive, '-C', tmp], { timeoutMs: 10 * 60 * 1000 })
+  if (un.code !== 0) {
+    fs.rmSync(tmp, { recursive: true, force: true })
+    throw new Error(`解压失败：${(un.stderr || un.stdout || `退出码 ${un.code}`).slice(0, 200)}`)
+  }
+  const exe = findJavaExe(tmp)
+  if (!exe) {
+    fs.rmSync(tmp, { recursive: true, force: true })
+    throw new Error('解压后没找到 java 可执行文件（压缩包结构变了？）')
+  }
+  // 只搬 JDK 根目录（含 bin 那一层），别把整包塞进 temurin-25/temurin-25/...
+  const home = path.dirname(path.dirname(exe))
+  fs.rmSync(dest, { recursive: true, force: true })
+  try {
+    fs.renameSync(home, dest)
+  } catch {
+    fs.cpSync(home, dest, { recursive: true })
+  }
+  fs.rmSync(tmp, { recursive: true, force: true })
+  fs.rmSync(archive, { force: true })
+
+  const installed = findJavaExe(dest)
+  if (!installed) {
+    fs.rmSync(dest, { recursive: true, force: true })
+    throw new Error('安装后没找到 java 可执行文件，已清空，重试一次即可')
+  }
+  log?.(`[WFMC] 正在自检 java -version…`)
+  const probe = await probeJava(installed)
+  if (!probe.ok) {
+    fs.rmSync(dest, { recursive: true, force: true })
+    throw new Error(`装好的 Java 起不来（${probe.error ?? '未知原因'}），已清空重来`)
+  }
+  await fs.promises.rm(marker, { force: true }).catch(() => undefined)
+  log?.(`[WFMC] Java ${probe.major ?? major} 自检通过`)
+  return installed
+}
+
 /** 根据版本号映射 Java 主版本 */
 export function requiredJavaMajor(mcVersion: string): number {
   const v = mcVersion.trim()
@@ -477,6 +583,28 @@ export async function ensureJava(
         }
       }
     }
+  }
+
+  // 官方运行时清单只到 Java 21：再新的（Cleanroom 要 25）走 Adoptium
+  if (major > 21) {
+    log?.(`[WFMC] 本机没有 Java ${major}，改从 Adoptium 下载 Temurin（官方清单只到 21）…`)
+    let adoptium = ''
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        adoptium = await runTask('java', `下载 Java ${major}（Temurin）`, async (ctx) =>
+          installAdoptiumJdk(major, log, { signal: ctx.signal })
+        )
+        break
+      } catch (e) {
+        if (attempt === 2 || e instanceof AbortError) {
+          log?.(`[WFMC] Java ${major} 下载失败：${(e as Error).message}。可以到设置里手动指定一个 Java ${major}。`)
+          throw e
+        }
+        log?.(`[WFMC] Java ${major} 下载中断，重试一次…`)
+      }
+    }
+    log?.(`[WFMC] Java ${major} 装好了：${adoptium}`)
+    return adoptium
   }
 
   const component =

@@ -37,8 +37,10 @@ import {
   refresh as unifiedRefresh
 } from './cloudlogin'
 import { cleanCategory, dataUsage } from './diskusage'
+import { blobStats, dedupeAll, gcBlobs } from './blobstore'
 import { searchLocal } from './search'
 import { store } from './store'
+import { mcpClientConfig, mcpStatus, restartMcpBridge, settleConsent } from './mcp'
 import { MultiDownloader, registerDownloader, unregisterDownloader, pauseDownload, resumeDownload, cancelDownload, downloaderState, downloaderSignal } from './fastdl'
 import { friendlyJavaError, scanJava, installJavaRuntime, requiredJavaMajor } from './java'
 import {
@@ -56,6 +58,10 @@ import {
   duplicateInstance,
   instanceDeleteSize,
   instanceDetail,
+  renameInstance,
+  setInstanceIcon,
+  clearInstanceIcon,
+  setInstanceMeta,
   updateInstance
 } from './instances'
 import { isRunning, killGame, launchInstance, listInstanceContent } from './launch'
@@ -189,6 +195,8 @@ import {
 import { pullPack } from './lanshare'
 import { logError, readErrors } from './errlog'
 import { exportInstanceAsMrpack, inspectMrpack } from './modpackexport'
+import { cfExportReady, exportInstanceAsCurseforgeZip } from './cfexport'
+import { exportInstanceAsServerPack, previewServerPack } from './serverpack'
 import {
   firstLanIp,
   lanList,
@@ -331,6 +339,17 @@ export function registerIpc() {
   ipcMain.handle('data:usage', () => dataUsage(store.dataDir))
 ipcMain.handle('data:clean-usage', (_e, key: 'downloads' | 'cache' | 'logs') => cleanCategory(store.dataDir, key))
 ipcMain.handle('data:size', () => store.dataSize())
+  // 内容仓库：同一个 jar 在多个实例 / 服务端里只占一份空间
+  ipcMain.handle('blobs:stats', () => blobStats())
+  ipcMain.handle('blobs:gc', () => gcBlobs())
+  ipcMain.handle('blobs:dedupe', () =>
+    runTask('misc', '整理重复文件（硬链接去重）', async (ctx) =>
+      dedupeAll({
+        signal: ctx.signal,
+        onProgress: (p) => ctx.report({ phase: p.phase, current: p.current, total: p.total })
+      })
+    )
+  )
   // 数据目录体检：是不是放在了安装目录里（更新会把安装目录清空 → 必须提示）
   ipcMain.handle('data:health', () => store.dataHealth())
 
@@ -423,6 +442,23 @@ ipcMain.handle('data:size', () => store.dataSize())
   ipcMain.handle('instance:detail', (_e, id: string) => instanceDetail(id))
   ipcMain.handle('instance:create', (_e, input: Parameters<typeof createInstance>[0]) => createInstance(input))
   ipcMain.handle('instance:update', (_e, id: string, patch: Partial<Instance>) => updateInstance(id, patch))
+  // 改名：只动显示名（id / 目录 / 云端备份的键都不动），改完顺手同步一次云端配置包
+  ipcMain.handle('instance:rename', (_e, id: string, name: string) => renameInstance(id, name))
+  // 封面：挑一张图，主进程负责拷进实例目录（渲染层拿不到本地文件系统）
+  ipcMain.handle('instance:pick-icon', async (_e, id: string) => {
+    const res = await dialog.showOpenDialog({
+      title: '选一张封面图',
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }]
+    })
+    if (res.canceled || !res.filePaths[0]) return undefined
+    return setInstanceIcon(id, res.filePaths[0])
+  })
+  ipcMain.handle('instance:clear-icon', (_e, id: string) => clearInstanceIcon(id))
+  // 置顶 / 分组
+  ipcMain.handle('instance:meta', (_e, id: string, patch: { pinned?: boolean; group?: string }) =>
+    setInstanceMeta(id, patch)
+  )
   // 删之前先量一下：界面能在确认框里说清「要删多少文件 / 多大」
   ipcMain.handle('instance:delete-size', (_e, id: string) => instanceDeleteSize(id))
   ipcMain.handle('instance:delete', async (_e, id: string, removeFiles: boolean) => {
@@ -795,6 +831,15 @@ ipcMain.handle('data:size', () => store.dataSize())
     return true
   })
   ipcMain.handle('app:read-errors', () => readErrors())
+
+  // ---------- MCP（AI 助手直连启动器） ----------
+  // 读写都在 mcp.ts 里；这里只负责把状态和「允许/拒绝」的答复接过来
+  ipcMain.handle('mcp:status', () => mcpStatus())
+  ipcMain.handle('mcp:config', () => mcpClientConfig())
+  ipcMain.handle('mcp:restart', async () => await restartMcpBridge())
+  ipcMain.handle('mcp:consent-reply', (_e, id: string, allow: boolean, remember: boolean) =>
+    settleConsent(id, allow, remember)
+  )
 
   // ---------- CurseForge ----------
   ipcMain.handle('cf:test-key', async (_e, key: string) => await testCurseforgeKey(key))
@@ -1229,6 +1274,33 @@ ipcMain.handle('data:size', () => store.dataSize())
       })
     )
   )
+  ipcMain.handle('modpack:export-cfzip', async (_e, instanceId: string) =>
+    await runTask('modpack', '导出 CurseForge 整合包 (.zip)', async (ctx) =>
+      exportInstanceAsCurseforgeZip(
+        instanceId,
+        (p) => {
+          progress({ ...p, taskId: ctx.id })
+          ctx.report({ phase: p.phase, current: p.current, total: p.total })
+        },
+        ctx.signal
+      )
+    )
+  )
+  ipcMain.handle('modpack:cf-ready', (_e, instanceId: string) => cfExportReady(instanceId))
+  // 服务端整合包：先预览「会被剔除的纯客户端 mod」，再正式导出
+  ipcMain.handle('modpack:serverpack-preview', async (_e, instanceId: string) => await previewServerPack(instanceId))
+  ipcMain.handle('modpack:export-serverpack', async (_e, instanceId: string) =>
+    await runTask('modpack', '导出服务端整合包 (.zip)', async (ctx) =>
+      exportInstanceAsServerPack(
+        instanceId,
+        (p) => {
+          progress({ ...p, taskId: ctx.id })
+          ctx.report({ phase: p.phase, current: p.current, total: p.total })
+        },
+        ctx.signal
+      )
+    )
+  )
   ipcMain.handle('modpack:inspect', (_e, file: string) => inspectMrpack(file))
   ipcMain.handle('modpack:check-update', async (_e, instanceId: string) => await checkPackUpdate(instanceId))
   // 就地升级整合包：新包的配置不会盖掉用户改过的文件（改过的会保留，新版留在 .packnew 旁边）
@@ -1661,6 +1733,22 @@ ipcMain.handle('data:size', () => store.dataSize())
     const file = path.join(dir, `share-${stamp}.png`)
     fs.writeFileSync(file, Buffer.from(stripPngPrefix(base64), 'base64'))
     return file
+  })
+  // 「另存为…」：自己挑位置（桌面 / U 盘 / 相册目录都行），取消就什么都不做
+  ipcMain.handle('share:save-png-as', async (_e, instanceId: string, base64: string) => {
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+    const defaultDir = screenshotsDir(instanceId)
+    fs.mkdirSync(defaultDir, { recursive: true })
+    const safeName = (store.getInstance(instanceId)?.name ?? 'WFMC').replace(/[\\/:*?"<>|]/g, '_')
+    const res = await dialog.showSaveDialog({
+      title: '保存分享卡',
+      defaultPath: path.join(defaultDir, `share-${safeName}-${stamp}.png`),
+      filters: [{ name: 'PNG 图片', extensions: ['png'] }]
+    })
+    if (res.canceled || !res.filePath) return undefined
+    const target = res.filePath.toLowerCase().endsWith('.png') ? res.filePath : `${res.filePath}.png`
+    fs.writeFileSync(target, Buffer.from(stripPngPrefix(base64), 'base64'))
+    return target
   })
   ipcMain.handle('share:copy-image', (_e, base64: string) => {
     const img = nativeImage.createFromBuffer(Buffer.from(stripPngPrefix(base64), 'base64'))

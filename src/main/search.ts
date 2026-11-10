@@ -19,7 +19,9 @@ const LOADER_LABEL: Record<LoaderType, string> = {
   fabric: 'Fabric',
   quilt: 'Quilt',
   forge: 'Forge',
-  neoforge: 'NeoForge'
+  neoforge: 'NeoForge',
+  legacyfabric: 'Legacy Fabric',
+  cleanroom: 'Cleanroom'
 }
 
 const CONTENT_SPECS: {

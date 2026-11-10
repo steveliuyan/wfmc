@@ -151,6 +151,9 @@ export const PAIRS: [string, string][] = [
   ['原版', 'Vanilla'],
   ['WFMC 启动器 · 一起开黑', 'WFMC Launcher · Play together'],
   ['分享卡已经存到截图目录了', 'Share card saved to your screenshots folder'],
+  ['分享卡已经存好了', 'Share card saved'],
+  ['另存为…', 'Save as…'],
+  ['保存分享卡', 'Save share card'],
   ['图片已经复制，直接粘到聊天窗就行', 'Image copied, just paste it into your chat'],
   ['复制图片', 'Copy image'],
   ['用的这张截图当底图', 'Using this screenshot as the background'],
@@ -343,6 +346,11 @@ export const PAIRS: [string, string][] = [
   ['核心逻辑补了 11 组自动化断言：NBT 读写往返、依赖成环、联机清单编解码与差分，一条 npm run test:core 跑完。', 'Added 11 automated assertions for core logic: NBT read/write round-trips, dependency cycles, and room manifest encode/decode plus diffing — all run by npm run test:core.'],
   ['中文化自检阈值提到 100%：以后漏翻一句，npm run i18n:check 直接失败。', 'The translation self-check now requires 100%: a single untranslated string makes npm run i18n:check fail.'],
 
+  // ---------- 1.3.4 升级公告 ----------
+  ['新增 Legacy Fabric、Cleanroom 两个加载器：1.12.2 的老 Fabric 整合包能装了，Cleanroom 会自动下 Java 25。', 'Added two loaders: Legacy Fabric (for 1.12.2-and-older Fabric packs) and Cleanroom, which installs Java 25 for you.'],
+  ['设置里多了「AI 助手」：打开后复制配置粘进 Claude Desktop，AI 就能帮你开游戏、装整合包、看启动日志；会改东西的操作都会先弹窗问你。', 'New AI assistant in Settings: turn it on, paste the config into Claude Desktop, and the AI can launch the game, install modpacks and read launch logs — anything that changes something asks you first.'],
+  ['弹窗不再叠在一起：更新公告、新手引导、弹窗通知按顺序一次弹一个，新装用户首次打开也不会连弹四个。', 'Dialogs no longer stack: update notes, onboarding and notices appear one at a time, and a fresh install no longer shows four popups at once.'],
+
   // ---------- 1.3.0 报障修复（文件选择器过滤器 / 内容管理搜索） ----------
   ['图片', 'Images'],
   ['服务端文件', 'Server files'],
@@ -383,5 +391,6 @@ export const PAIRS: [string, string][] = [
   ['中文 MC 论坛资源区（整合包 / 模组 / 材质 / 汉化），上面切「国内站」能直接搜', 'Chinese MC forum resource area (modpacks / mods / textures / translations) — switch to “Domestic sites” above to search it directly'],
   ['世界', 'Worlds'],
   ['等', 'and more'],
-  ['整合包是一整个实例，下载 zip 后拖进启动器窗口就能导入', 'A modpack is a whole instance: download the zip and drag it into the launcher window to import it']
+  ['整合包是一整个实例，下载 zip 后拖进启动器窗口就能导入', 'A modpack is a whole instance: download the zip and drag it into the launcher window to import it'],
+  ['输入一下', 'Type something']
 ]

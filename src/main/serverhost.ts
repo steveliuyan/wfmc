@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import type { ProgressFn } from '../shared/types'
 import { store } from './store'
+import { adopt } from './blobstore'
 import { gamePathFor } from './paths'
 import { startManifestServer, stopManifestServer } from './serversync'
 import { downloadAll, downloadFile, fetchJson, fetchText, sources } from './net'
@@ -845,7 +846,9 @@ function copyFromInstance(instanceId: string, serverId: string): { mods: number;
     for (const name of fs.readdirSync(modsSrc)) {
       // 只拿启用的 mod（.disabled 跳过）
       if (!name.toLowerCase().endsWith('.jar')) continue
-      fs.copyFileSync(path.join(modsSrc, name), path.join(serverModsDir(serverId), name))
+      const dest = path.join(serverModsDir(serverId), name)
+      fs.copyFileSync(path.join(modsSrc, name), dest)
+      adopt(dest) // 和实例里同一个 jar 就共享一份，不重复占空间
       mods++
     }
   }
@@ -911,8 +914,10 @@ async function copyFromPack(
           if (fs.existsSync(dest)) continue
           fs.mkdirSync(path.dirname(dest), { recursive: true })
           fs.copyFileSync(file.full, dest)
-          if (folder === 'mods') mods++
-          else configs++
+          if (folder === 'mods') {
+            adopt(dest)
+            mods++
+          } else configs++
         }
       }
     }

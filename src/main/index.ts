@@ -9,6 +9,7 @@ import { flushModMetaCache } from './moddoctor'
 import { refreshTray, setupTray } from './tray'
 import { applyProxy, installChromiumFetch } from './proxy'
 import { startCloudScheduler, stopCloudScheduler } from './cloudsync'
+import { startMcpBridge, stopMcpBridge } from './mcp'
 
 const devUrl = process.env.VITE_DEV_SERVER_URL
 
@@ -173,6 +174,7 @@ function createWindow() {
   return win
 }
 
+// MCP stdio 端不在这里：它得用 ELECTRON_RUN_AS_NODE=1 跑成纯 Node（见 mcp-stdio.ts / mcpClientConfig）
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
@@ -207,6 +209,8 @@ app.whenReady().then(async () => {
     registerIpc()
     const win = createWindow()
     setMainWindow(win)
+    // MCP：给 AI 助手开一个本机回环、带令牌的小接口（设置里能关）
+    void startMcpBridge()
     setupTray(win)
     // 冷启动就是被 wfmc:// 拉起来的（浏览器回跳时启动器还没开）
     handleProtocolUrl(protocolUrlFromArgv(process.argv))
@@ -221,6 +225,7 @@ app.whenReady().then(async () => {
   // 退出前把 jar 元数据缓存落盘，下次进内容管理不用再拆一遍压缩包
   app.on('will-quit', () => {
     stopCloudScheduler()
+    void stopMcpBridge()
     flushMetaCache()
     flushModMetaCache()
   })

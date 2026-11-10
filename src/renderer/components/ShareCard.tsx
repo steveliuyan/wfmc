@@ -219,6 +219,21 @@ export default function ShareCard({ instance, shotPath, sessionMs, onMute, onClo
     }
   }
 
+  /** 自己挑位置存（桌面 / U 盘 / 群文件夹），取消就什么都不做 */
+  const saveAs = async () => {
+    setSaving(true)
+    try {
+      const file = await api.shareSavePngAs(instance.id, toPng())
+      if (!file) return
+      toast('分享卡已经存好了', 'success')
+      await api.revealBackup(file).catch(() => undefined)
+    } catch (e) {
+      toast(`保存失败：${(e as Error).message}`, 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="dialog-mask" onClick={onClose}>
       <div
@@ -263,6 +278,9 @@ export default function ShareCard({ instance, shotPath, sessionMs, onMute, onClo
           )}
           <button className="btn" onClick={save} disabled={drawing || saving}>
             {saving ? '保存中…' : '保存到截图目录'}
+          </button>
+          <button className="btn" onClick={saveAs} disabled={drawing || saving}>
+            另存为…
           </button>
           <button className="btn" onClick={copy} disabled={drawing}>
             复制图片

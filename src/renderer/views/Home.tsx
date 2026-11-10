@@ -58,10 +58,17 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
       const ms = playStartedAt.current ? Date.now() - playStartedAt.current : 0
       playStartedAt.current = undefined
       // 只在本页还开着、且这次玩够 2 分钟时才弹，免得刚点启动就被弹窗糊一脸
-      if (ms > 120_000 && localStorage.getItem('shareSummaryOff') !== '1') setSummary({ id: currentId, ms })
+      if (ms > 120_000 && settings?.shareSummary !== false) setSummary({ id: currentId, ms })
     }
     prevLaunch.current = now
-  }, [state?.state, currentId])
+  }, [state?.state, currentId, settings?.shareSummary])
+  // 老版本把「以后不自动弹」记在 localStorage 里，这里一次性迁进全局设置（设置页里还能再打开）
+  useEffect(() => {
+    if (localStorage.getItem('shareSummaryOff') === '1') {
+      localStorage.removeItem('shareSummaryOff')
+      if (settings?.shareSummary !== false) void saveSettings({ shareSummary: false })
+    }
+  }, [])
   // 折叠状态存本地：切页面回来 / 重开软件都还是上次的样子
   const [logCollapsed, setLogCollapsed] = useState(() => localStorage.getItem('logCollapsed') === '1')
   const toggleLog = () => {
@@ -752,7 +759,9 @@ export default function Home({ goto }: { goto: (p: PageId) => void }) {
             instance={ins}
             sessionMs={summary.ms}
             onMute={() => {
-              localStorage.setItem('shareSummaryOff', '1')
+              // 存进全局设置（设置 → 外观 → 游玩总结 里能再打开）；localStorage 是老版本的开关，顺手清掉
+              localStorage.removeItem('shareSummaryOff')
+              void saveSettings({ shareSummary: false })
               setSummary(undefined)
             }}
             onClose={() => setSummary(undefined)}

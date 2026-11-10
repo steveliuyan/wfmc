@@ -830,6 +830,10 @@ function analyzeMods(instance: InstanceInfo, mods: ModMeta[]): ModIssue[] {
       if (all.includes(expected)) return true
       if (expected === 'neoforge' && all.includes('forge')) return true
       if (expected === 'quilt' && all.includes('fabric')) return true
+      // Legacy Fabric 就是老版本的 Fabric，读的是同一套 fabric.mod.json
+      if (expected === 'legacyfabric' && all.includes('fabric')) return true
+      // Cleanroom 是 1.12.2 上的 Forge 平替，读的也是 mods.toml
+      if (expected === 'cleanroom' && all.includes('forge')) return true
       return false
     }
     const mismatch = active.filter((m) => !usableHere(m))
@@ -853,7 +857,7 @@ function analyzeMods(instance: InstanceInfo, mods: ModMeta[]): ModIssue[] {
   const missing = new Map<string, { files: string[]; range?: string }>()
   const disabledDeps = new Map<string, { files: string[]; jars: string[]; range?: string }>()
   const tooOld = new Map<string, { files: string[]; range?: string; have: string }>()
-  const forgeFamily = expected === 'forge' || expected === 'neoforge'
+  const forgeFamily = expected === 'forge' || expected === 'neoforge' || expected === 'cleanroom'
   for (const mod of active) {
     // 通用包（双元数据）：Forge 实例只看 mods.toml 那侧，别拿 Fabric 的依赖报警
     const useForge = forgeFamily && mod.forgeDepends !== undefined

@@ -827,11 +827,15 @@ nav {
 .badge.forge { color: #d2691e; }
 .badge.neoforge { color: #1478b8; }
 .badge.quilt { color: #8a5cf6; }
+.badge.legacyfabric { color: #96703a; }
+.badge.cleanroom { color: #0f8f6f; }
 
 :root[data-theme='dark'] .badge.fabric { color: #ffd479; }
 :root[data-theme='dark'] .badge.forge { color: #ff9b6a; }
 :root[data-theme='dark'] .badge.neoforge { color: #8fd0ff; }
 :root[data-theme='dark'] .badge.quilt { color: #c7a6ff; }
+:root[data-theme='dark'] .badge.legacyfabric { color: #e8c07d; }
+:root[data-theme='dark'] .badge.cleanroom { color: #6fe3c0; }
 
 /* ============ 通用 ============ */
 .row {
@@ -1078,6 +1082,133 @@ label.full {
 
 .instance-head h3 {
   margin: 0;
+  cursor: text;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 卡片标题就地改名：和 h3 同样大小，只是多一个框，不跳动 */
+.instance-head .rename-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.05em;
+  font-weight: 600;
+  font-family: inherit;
+  color: inherit;
+  background: var(--input-bg, rgba(127, 127, 127, 0.08));
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+  padding: 2px 8px;
+  outline: none;
+}
+
+.instance-head .rename-input:focus {
+  border-color: var(--accent, #3b82f6);
+}
+
+/* 实例封面：48px 圆角方块，没图时显示名字首字 */
+.instance-avatar {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border-radius: 12px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.3));
+  background: linear-gradient(135deg, rgba(120, 140, 255, 0.22), rgba(120, 220, 200, 0.18));
+  color: inherit;
+  font-size: 1.15em;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.instance-avatar:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent, #3b82f6);
+}
+.instance-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 卡片头右侧：分组 / 加载器 / 置顶星 */
+.instance-head .head-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.badge.group {
+  background: rgba(140, 110, 255, 0.16);
+  border-color: rgba(140, 110, 255, 0.4);
+  color: inherit;
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pin-btn {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  font-size: 1.05em;
+  line-height: 1;
+  color: var(--muted, #8a8f98);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+.pin-btn:hover {
+  opacity: 1;
+  transform: scale(1.15);
+}
+.pin-btn.on {
+  opacity: 1;
+  color: #f5b93b;
+}
+
+/* 页头「排序」下拉 */
+.sort-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9em;
+}
+.sort-pick select {
+  font: inherit;
+  color: inherit;
+  background: var(--input-bg, rgba(127, 127, 127, 0.08));
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+  padding: 4px 6px;
+  outline: none;
+  cursor: pointer;
+}
+
+/* 通用输入弹窗（askPrompt）里的输入框：不依赖 .instance-head */
+.dialog .prompt-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 10px;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  color: inherit;
+  background: var(--input-bg, rgba(127, 127, 127, 0.08));
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+  padding: 7px 10px;
+  outline: none;
+}
+.dialog .prompt-input:focus {
+  border-color: var(--accent, #3b82f6);
 }
 
 .detail {
@@ -4446,3 +4577,18 @@ textarea:focus {
 .whats-new { max-width: 560px }
 .whats-new-list { margin: 14px 0 4px; padding-left: 20px; display: flex; flex-direction: column; gap: 8px }
 .whats-new-list li { line-height: 1.55 }
+
+/* ---- AI 助手（MCP）：客户端配置那段 JSON，点一下就复制 ---- */
+.set-code{font-family:ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;font-size:12px;
+  line-height:1.55;background:var(--bg-3);border:1px solid var(--line);border-radius:10px;
+  padding:10px 12px;margin:8px 0 0;white-space:pre-wrap;word-break:break-all;cursor:pointer;
+  max-height:220px;overflow:auto;transition:border-color .2s ease}
+.set-code:hover{border-color:var(--accent)}
+
+/* ---- AI 助手（MCP）确认弹层：压在所有弹层上面 ---- */
+.dialog-mask.mcp-consent-mask{z-index:700}
+.mcp-consent{max-width:560px;width:min(560px,92vw)}
+.mcp-consent-tool{display:flex;align-items:center;gap:8px;margin:6px 0 8px;font-size:14px}
+.mcp-consent-badge{flex:0 0 auto;padding:1px 6px;border-radius:6px;font-size:11px;font-weight:700;
+  letter-spacing:.4px;color:var(--accent-ink);background:var(--accent)}
+.mcp-consent-summary{font-size:13px;line-height:1.6;color:var(--fg);white-space:pre-wrap;word-break:break-word}

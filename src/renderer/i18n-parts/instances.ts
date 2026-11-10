@@ -12,6 +12,8 @@ export const PAIRS: [string, string][] = [
   ['Fabric（轻量、更新快）', 'Fabric (lightweight, fast updates)'],
   ['NeoForge（1.20.2+ 主流）', 'NeoForge (mainstream on 1.20.2+)'],
   ['Forge（老整合包常用）', 'Forge (common in older modpacks)'],
+  ['Legacy Fabric（1.12.2 及更早）', 'Legacy Fabric (1.12.2 and older)'],
+  ['Cleanroom（1.12.2，要 Java 25）', 'Cleanroom (1.12.2, needs Java 25)'],
   ['版本', 'Version'],
   ['先选加载器', 'Choose a loader first'],
   ['暂无版本', 'No versions'],
@@ -143,5 +145,31 @@ export const PAIRS: [string, string][] = [
   ['刷新', 'Refresh'],
   ['一键进服', 'Join in one click'],
   ['移除', 'Remove'],
-  ['就地升级到新版本？\n\n· 你改过的配置会保留，新版文件放在同目录的 .packnew 里可以对比\n· 被你删掉、但你动过的文件不会被删\n· 存档不会动，但为防万一建议先备份', 'Upgrade to the new version in place?\n\n· Your edited configs are kept; the new files go into .packnew in the same folder so you can compare\n· Files you deleted but had modified are not removed\n· Saves stay untouched, but back them up first just in case']
-]
+  ['就地升级到新版本？\n\n· 你改过的配置会保留，新版文件放在同目录的 .packnew 里可以对比\n· 被你删掉、但你动过的文件不会被删\n· 存档不会动，但为防万一建议先备份', 'Upgrade to the new version in place?\n\n· Your edited configs are kept; the new files go into .packnew in the same folder so you can compare\n· Files you deleted but had modified are not removed\n· Saves stay untouched, but back them up first just in case'],
+  ['改名', 'Rename'],
+  ['双击改名', 'Double-click to rename'],
+  ['分组', 'Group'],
+  ['点一下加封面', 'Click to add a cover'],
+  ['点一下换封面，右键去掉封面', 'Click to change the cover, right-click to remove it'],
+  ['封面换好了', 'Cover updated'],
+  ['给这个实例分组', 'Group this instance'],
+  ['同一个分组的实例会排在一起。留空就是不分组。', 'Instances in the same group are listed together. Leave it empty to remove the group.'],
+  ['例如：整合包 / 原版生存 / 和朋友联机', 'e.g. Modpacks / Vanilla survival / Playing with friends'],
+  ['已取消分组', 'Group removed'],
+  ['排序方式（置顶的永远在最前面）', 'Sort order (pinned instances always come first)'],
+  ['最近玩过', 'Recently played'],
+  ['按名字', 'By name'],
+  ['按分组', 'By group'],
+  ['去掉封面', 'Remove cover'],
+  ['只是把卡片上这张图去掉，游戏文件一点不动。', 'This only clears the picture on the card. Game files are untouched.'],
+  ['去掉', 'Remove'],
+  ['分组（点下面的「分组」改）', 'Group (change it with the Group button below)'],
+  ['置顶', 'Pin to top'],
+  ['取消置顶', 'Unpin'],
+  // 1.3.4：导出 CurseForge 包 / 服务端包
+  ['导出服务端整合包', 'Export server pack'],
+  ['正在生成服务端包…', 'Generating server pack…'],
+  [
+    '没配 CurseForge API key：导出仍可用，但所有 mod 会整包塞进 overrides（包体会大很多）',
+    'No CurseForge API key: export still works, but every mod goes into overrides (a much bigger pack)'
+  ]]

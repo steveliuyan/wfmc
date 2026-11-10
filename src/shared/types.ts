@@ -1,5 +1,5 @@
 // 全局共享类型（主进程 + 渲染进程共用）
-export type LoaderType = 'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'
+export type LoaderType = 'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge' | 'legacyfabric' | 'cleanroom'
 export type ThemeMode = 'light' | 'dark' | 'system'
 
 export interface Settings {
@@ -85,10 +85,29 @@ export interface Settings {
   /** 首页下面几块卡片的排列顺序（自己拖着改的） */
   homeLayout?: string[]
   /**
+   * 退出游戏后弹「本次游玩总结」分享卡（玩了 2 分钟以上才弹）。
+   * undefined = 按默认开着；用户点过卡片上的「以后不自动弹」或设置里关掉就是 false。
+   */
+  shareSummary?: boolean
+  /**
    * 云同步（自建服务端）。**默认关闭**，没配就完全不会发任何网络请求。
    * 客户端这一侧只是「按契约打 HTTP」，服务端契约见 docs/SERVER-API.md。
    */
   cloud?: CloudSettings
+  /**
+   * 启动器 MCP（让 AI 助手直连启动器）。默认开：只在本机回环地址上开一个带令牌的小接口，
+   * 读操作（列实例 / 看日志 / 搜模组）直接放行，写操作（启动游戏 / 装模组 / 装整合包）
+   * 每次都要用户在界面上点「允许」，除非自己把 trustAll 打开。
+   */
+  mcp?: McpSettings
+}
+
+/** 启动器 MCP 的开关（默认都按「开着 + 逐次确认」处理） */
+export interface McpSettings {
+  /** false = 完全关掉（连端点文件都不写，AI 客户端连不上） */
+  enabled?: boolean
+  /** true = 写操作不再逐次确认（自己用、或者完全信任这个 AI 时开） */
+  trustAll?: boolean
 }
 
 /**
@@ -321,6 +340,16 @@ export interface Instance {
   lastPlayed?: number
   /** 是否已完整安装 */
   installed?: boolean
+  /**
+   * 卡片封面图：实例目录里那张家图的绝对路径（`instance:pick-icon` 会把它拷进实例目录）。
+   * 没设就显示首字母色块。**图片本身不进云端配置包**（包里只有 instance.json），
+   * 换机器后路径失效会自动退回色块。
+   */
+  icon?: string
+  /** 置顶：列表里永远排在最前面 */
+  pinned?: boolean
+  /** 自定义分组名（空 = 未分组），列表按它聚在一起 */
+  group?: string
 }
 
 export interface JavaInfo {
@@ -693,6 +722,33 @@ export interface DiskUsage {
 
 export interface CleanResult {
   files: number
+  bytes: number
+}
+
+/** 内容仓库（硬链接去重）现状 */
+export interface BlobStats {
+  /** 仓库里有多少份唯一内容 */
+  blobs: number
+  /** 这些唯一内容一共多少字节（≈ 磁盘上真正占的空间） */
+  bytes: number
+  /** 一共被共享了多少份（= 各实例里指向仓库的链接数） */
+  links: number
+  /** 因为共享省下的字节 */
+  savedBytes: number
+  /** 没人引用的孤儿数量 / 字节 */
+  orphans: number
+  orphanBytes: number
+  /** 超时提前返回（数得不准，只是最小值） */
+  partial: boolean
+}
+
+/** 一次去重扫描的结果 */
+export interface DedupeResult {
+  /** 扫到多少个可共享文件 */
+  scanned: number
+  /** 这次真正变成共享的个数 */
+  linked: number
+  /** 这次省下的字节 */
   bytes: number
 }
 

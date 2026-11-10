@@ -5,6 +5,7 @@ import type { LoaderType, ProgressFn } from '../shared/types'
 import { AbortError, fetchJson } from './net'
 import { MultiDownloader, registerDownloader, unregisterDownloader } from './fastdl'
 import { store } from './store'
+import { adopt, dedupeTree, shareable } from './blobstore'
 import { installInstanceGame } from './minecraft'
 import type { SpawnFn } from './game'
 import { createInstance } from './instances'
@@ -34,10 +35,16 @@ async function downloadPackFiles(
     else signal.addEventListener('abort', onAbort, { once: true })
   }
   try {
-    return await dl.downloadAll(
+    const errs = await dl.downloadAll(
       items.map((i) => ({ urls: i.urls.filter(Boolean), dest: i.dest })),
       (done, total) => onProgress?.({ key, phase, current: done, total })
     )
+    // 落地的模组 / 资源包收进内容仓库：同一个包再装一遍、或者两个实例用同一个jar，
+    // 都只占一份空间（配置文件不碰，它们会被就地改写）
+    for (const it of items) {
+      if (shareable(it.dest)) adopt(it.dest)
+    }
+    return errs
   } finally {
     if (signal) signal.removeEventListener('abort', onAbort)
     unregisterDownloader(key)
@@ -68,6 +75,35 @@ function loaderFromDependencies(deps: Record<string, string>): { loader: LoaderT
 
 /** 安装 Modrinth 整合包（.mrpack 本地文件） */
 export async function installMrpackFile(
+  mrpackPath: string,
+  displayName?: string,
+  onProgress?: ProgressFn,
+  meta?: { projectId?: string; versionId?: string; versionNumber?: string; url?: string },
+  signal?: AbortSignal,
+  spawn?: SpawnFn
+): Promise<string> {
+  // 同 installCurseforgeZip：拖拽安装这条路没有 runTask 兜底，失败必须自己给进度条一个终态，
+  // 否则渲染层只看 payload.done，进度条会永远停在最后一行输出上。
+  const seen = new Set<string>()
+  const track: ProgressFn | undefined = onProgress
+    ? (p) => {
+        if (p?.key) seen.add(p.key)
+        onProgress(p)
+      }
+    : undefined
+  try {
+    return await installMrpackFileInner(mrpackPath, displayName, track, meta, signal, spawn)
+  } catch (e) {
+    const msg = ((e as Error)?.message ?? String(e)).replace(/\s+/g, ' ').trim().slice(0, 200)
+    for (const key of seen) {
+      onProgress?.({ key, phase: `整合包安装失败：${msg}`, current: 1, total: 1, done: true })
+    }
+    throw e
+  }
+}
+
+/** 真正干活的半边；失败由上面的 installMrpackFile 兜成终态进度 */
+async function installMrpackFileInner(
   mrpackPath: string,
   displayName?: string,
   onProgress?: ProgressFn,
@@ -140,6 +176,12 @@ export async function installMrpackFile(
     })
   } catch {
     /* 清单写不上不影响安装，只是升级时没法判断「哪些是用户改的」 */
+  }
+  // 装完统一收一遍内容仓库：同一个包再装一遍、或另一个实例用同一批模组，只占一份空间
+  try {
+    dedupeTree(gameDir)
+  } catch {
+    /* 去重失败不影响装好，下次手动去重还能补上 */
   }
   return instance.id
 }
@@ -307,6 +349,11 @@ async function installCurseforgeZipInner(
   }
 
   await extractZipPrefixes(zipPath, [`${manifest.overrides ?? 'overrides'}/`], gameDir)
+  try {
+    dedupeTree(gameDir)
+  } catch {
+    /* 去重失败不影响装好 */
+  }
   onProgress?.({ key, phase: '整合包安装完成', current: 1, total: 1, done: true })
   return instance.id
 }
@@ -652,6 +699,11 @@ export async function upgradeInstancePack(
       updatedAt: Date.now(),
       files: newFiles
     })
+    try {
+      dedupeTree(gameDir)
+    } catch {
+      /* 去重失败不影响升级 */
+    }
 
     const current = store.getInstance(instanceId)
     if (current) {

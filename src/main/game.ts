@@ -159,6 +159,9 @@ function rewriteUrl(url: string): string[] {
     out.push(url.replace('https://maven.minecraftforge.net', src.maven))
   } else if (url.includes('maven.neoforged.net')) {
     out.push(url.replace('https://maven.neoforged.net/releases', src.maven))
+  } else if (url.includes('maven.fabricmc.net')) {
+    // Legacy Fabric 的 asm / sponge-mixin / fabric-loader 都在 maven.fabricmc.net 上，bmclapi 有镜像
+    out.push(url.replace('https://maven.fabricmc.net', src.maven))
   } else if (url.includes('resources.download.minecraft.net')) {
     out.push(url.replace('https://resources.download.minecraft.net', src.assets))
   }
@@ -169,6 +172,21 @@ function rewriteUrl(url: string): string[] {
 
 interface AssetIndexJson {
   objects: Record<string, { hash: string; size: number }>
+}
+
+/**
+ * maven 坐标 → 仓库里的相对路径：`group:artifact:version[:classifier][@ext]`。
+ * 有些版本 json（比如 Cleanroom 的）里 natives 那批 classifiers 只给了 url/sha1/size，
+ * 没给 path，下游按 path 拼磁盘位置会炸，所以缺的时候从名字算。
+ */
+export function libraryRelPath(name: string): string | undefined {
+  const [coords, ext = 'jar'] = name.split('@')
+  const parts = coords.split(':')
+  if (parts.length < 3) return undefined
+  const [group, artifact, version, classifier] = parts
+  return `${group.replace(/\./g, '/')}/${artifact}/${version}/${artifact}-${version}${
+    classifier ? `-${classifier}` : ''
+  }.${ext}`
 }
 
 /** 下载 json 里描述的所有 libraries（含 natives 包） */
@@ -184,7 +202,7 @@ async function installLibraries(
   registerDownloader(key, dl)
   const items = version.libraries.map((lib) => ({
     urls: rewriteUrl(lib.download.url),
-    dest: path.join(gameDir, 'libraries', lib.download.path),
+    dest: path.join(gameDir, 'libraries', lib.download.path ?? libraryRelPath(lib.name) ?? ''),
     size: lib.download.size
   }))
   const remaining = items.reduce((s, i) => s + (i.size ?? 0), 0)

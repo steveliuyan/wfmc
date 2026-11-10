@@ -43,6 +43,7 @@ const VERBS: Record<string, string> = {
   校验: 'Verify',
   打包: 'Pack',
   统计: 'Compute',
+  去重: 'Dedupe',
   迁移: 'Migrate',
   换目录: 'Switch folder',
   扫描: 'Scan',
@@ -280,6 +281,7 @@ export function convertDynamic(value: string): string | undefined {
     return `Game instances and saves are untouched. Your current config is backed up before restoring. Continue?`
 
   /* --- 分享卡 / 时长 --- */
+  if ((m = v.match(/^已分到「(.+)」$/))) return `Moved into “${m[1]}”`
   if ((m = v.match(/^这次玩了 (.+) 分钟$/))) return `Played ${m[1]} minutes this session`
   if ((m = v.match(/^玩了 (.+) 小时 (.+) 分$/))) return `Played ${m[1]} h ${m[2]} min`
   if ((m = v.match(/^玩了 (.+) 小时$/))) return `Played ${m[1]} hours`
@@ -345,5 +347,38 @@ export function convertDynamic(value: string): string | undefined {
   if ((m = v.match(/^删掉「(.+)」这份快照（(.+)）？[\s\S]*$/)))
     return `Delete the snapshot from "${m[1]}" (${m[2]})? Only that zip goes away and the current world is untouched, but you can't roll back to this one any more.`
 
+  /* --- 1.3.3：实例改名（卡片标题就地编辑） --- */
+  if ((m = v.match(/^已改名为「(.+)」，云端备份会自动跟着更新$/)))
+    return `Renamed to "${m[1]}"; the cloud backup updates along with it`
+  if ((m = v.match(/^已改名为「(.+)」（还没登录统一账号，只改了本机）$/)))
+    return `Renamed to "${m[1]}" (not signed in to the unified account, so only this device changed)`
+  if ((m = v.match(/^已改名为「(.+)」（自动备份是关的，只改了本机）$/)))
+    return `Renamed to "${m[1]}" (auto backup is off, so only this device changed)`
+  if ((m = v.match(/^改名失败：(.+)$/)))
+    return `Rename failed: ${m[1]}`
+
+  /* --- 1.3.4：导出服务端整合包 --- */
+  if ((m = v.match(/^没有需要剔除的纯客户端 mod，会带上 (.+) 服务端和启动脚本。$/)))
+    return `No client-only mods to remove; bundling the ${m[1]} server with start scripts.`
+  if ((m = v.match(/^会剔除 (.+) 个纯客户端 mod（保留 (.+) 个），并带上 (.+) 服务端和启动脚本。剔除的是：(.+)$/)))
+    return `Removing ${m[1]} client-only mods (keeping ${m[2]}), then bundling the ${m[3]} server with start scripts. Removed: ${m[4]}`
+  if ((m = v.match(/^已导出服务端包：保留 (.+) 个 mod，剔除 (.+) 个$/)))
+    return `Server pack exported: kept ${m[1]} mods, removed ${m[2]}`
+
+  /* --- 1.3.4：重复文件去重（硬链接） --- */
+  if ((m = v.match(/^共 (.+) 内容，省下 (.+)；(.+) 处引用复用，(.+) 个孤立文件（(.+)）$/)))
+    return `${m[1]} of content, ${m[2]} saved; reused in ${m[3]} places, ${m[4]} orphaned files (${m[5]})`
+  if ((m = v.match(/^去重完成：新共享 (.+) 个文件，省下 (.+)$/)))
+    return `Dedupe done: ${m[1]} files newly shared, ${m[2]} saved`
+  /* --- 1.3.4：AI 助手（MCP） --- */
+  if ((m = v.match(/^本机接口已开，端口 (.+)。把下面这段填进 AI 客户端的 mcpServers 里就能用了。$/)))
+    return `Endpoint is up on port ${m[1]}. Paste the snippet below into your AI client's mcpServers.`
+  if ((m = v.match(/^有 (.+) 个请求正等你确认，关掉这个页面也能看到弹窗。$/)))
+    return `${m[1]} request(s) waiting for your answer; the dialog shows even if you leave this page.`
+  if ((m = v.match(/^设置没生效：(.+)$/)))
+    return `Setting did not apply: ${m[1]}`
+
+  if ((m = v.match(/^清掉 (.+) 个孤立文件，腾出 (.+)$/)))
+    return `Removed ${m[1]} orphaned files, freed ${m[2]}`
   return undefined
 }

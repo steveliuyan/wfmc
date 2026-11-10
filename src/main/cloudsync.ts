@@ -521,6 +521,57 @@ export async function cloudStatus(): Promise<CloudStatus> {
   return status
 }
 
+// ------------------------------------------------------------ 轻量同步（改名这类小改动）
+
+/**
+ * 自动备份是「整包 + 打快照」，6 小时才一次，一次改名去占一份快照太浪费。
+ * 所以改动类操作走这条路：只把配置包推进云端 KV（覆盖上一次的），不打快照，
+ * 别的设备下次拉「当前配置」就能看到新名字。
+ */
+export type ConfigSyncResult = 'queued' | 'off' | 'not-logged-in'
+
+let syncTimer: NodeJS.Timeout | undefined
+let syncBusy = false
+
+export function scheduleConfigSync(reason: string, delayMs = 6000): ConfigSyncResult {
+  const s = getSettings()
+  if (!s.enabled || !s.autoBackup) return 'off'
+  if (!unified.isLoggedIn()) return 'not-logged-in'
+  // 连续改好几次（改完名又改回来）只同步最后一次，别把云端刷出一堆版本
+  if (syncTimer) clearTimeout(syncTimer)
+  syncTimer = setTimeout(() => {
+    syncTimer = undefined
+    void pushConfigOnly(reason)
+  }, delayMs)
+  return 'queued'
+}
+
+async function pushConfigOnly(reason: string): Promise<void> {
+  if (syncBusy) return
+  syncBusy = true
+  let bundlePath = ''
+  try {
+    const bundle = buildConfigBundle()
+    bundlePath = bundle.path
+    const r = await snap.pushBundle(bundle.path, { sha256: bundle.sha256, appVersion: app.getVersion() })
+    saveCloudSettings({ lastError: undefined })
+    console.log(`[cloud] ${reason}：配置包已同步到云端（v${r.version}，${(bundle.bytes / 1024).toFixed(0)} KB）`)
+  } catch (e) {
+    const msg = `同步失败：${(e as Error).message}`
+    saveCloudSettings({ lastError: msg })
+    console.error(`[cloud] ${reason}：${msg}`)
+  } finally {
+    syncBusy = false
+    if (bundlePath) {
+      try {
+        fs.rmSync(bundlePath, { force: true })
+      } catch {
+        /* 临时文件，删不掉无所谓 */
+      }
+    }
+  }
+}
+
 let timer: NodeJS.Timeout | undefined
 let busy = false
 

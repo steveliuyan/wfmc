@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { MinecraftFolder, ResolvedVersion } from '@xmcl/core'
+import { libraryRelPath } from './game'
 import { listZipEntries, readZipEntry } from './zip'
 
 /**
@@ -16,7 +17,9 @@ export async function extractNatives(folder: MinecraftFolder, version: ResolvedV
 
   let count = 0
   for (const lib of version.libraries.filter((l) => l.isNative)) {
-    const jarPath = folder.getLibraryByPath(lib.download.path)
+    const rel = lib.download.path ?? libraryRelPath(lib.name)
+    if (!rel) continue
+    const jarPath = folder.getLibraryByPath(rel)
     if (!fs.existsSync(jarPath)) continue
 
     const excluded = lib.extractExclude ?? []

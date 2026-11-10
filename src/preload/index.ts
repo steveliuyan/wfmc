@@ -9,6 +9,7 @@ export type EventChannel =
   | 'event:task'
   | 'event:mods-diagnosis'
   | 'event:protocol'
+  | 'event:mcp-consent'
 
 const api = {
   invoke: <T = unknown>(channel: string, ...args: unknown[]): Promise<T> =>

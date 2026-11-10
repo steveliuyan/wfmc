@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { collectDirFiles, readZipEntry, readZipFromFile, writeZip } from './zip'
+import { adopt, unshare } from './blobstore'
 
 /**
  * 模组目录快照（备份 / 回滚）。
@@ -177,7 +178,10 @@ export function restoreModsBackup(
     const resolved = path.resolve(path.join(modsDir, ...parts))
     if (resolved !== path.resolve(modsDir) && !resolved.startsWith(path.resolve(modsDir) + path.sep)) continue
     fs.mkdirSync(path.dirname(resolved), { recursive: true })
+    // 这个 jar 可能是指向内容仓库的硬链接：先断开，否则就地写会把别的实例那份一起改坏
+    unshare(resolved)
     fs.writeFileSync(resolved, readZipEntry(buf, entry))
+    adopt(resolved)
     inBackup.add(parts[parts.length - 1].toLowerCase())
     restored++
   }

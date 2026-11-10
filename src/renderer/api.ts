@@ -39,7 +39,7 @@ import type {
 
 /** CurseForge 里搜什么（两边共用的一份） */
 export type CfContentType = 'mod' | 'modpack' | 'resourcepack' | 'shader' | 'world'
-import type { CleanResult, DiskUsage, ModGraph, ModGraphEdge, ModGraphNode, SearchHit } from '../shared/types'
+import type { BlobStats, CleanResult, DedupeResult, DiskUsage, ModGraph, ModGraphEdge, ModGraphNode, SearchHit } from '../shared/types'
 import type { AddonHit, AddonVersion, HostedMetrics, InstalledAddon, RoomFixResult, RoomManifestDiff, RoomManifestPayload, ServerSched } from '../shared/types'
 import type { LevelPatch, PatchResult, SaveInspect, SaveWorld } from '../shared/types'
 import type { CloudSaveItem, CloudSaveLimits, CloudSaveUsage } from '../shared/types'
@@ -253,6 +253,27 @@ export interface ModUpdateItem {  file: string
   note?: string
 }
 
+/** MCP（AI 助手直连）状态，主进程 mcp.ts 里定的形状 */
+export interface McpStatusInfo {
+  enabled: boolean
+  running: boolean
+  port: number | null
+  endpointFile: string
+  trustAll: boolean
+  pendingConsent: number
+  clientConfig: { command: string; args: string[]; env: Record<string, string>; json: string }
+}
+
+/** AI 客户端想做一件写操作，界面上要问一句 */
+export interface McpConsentRequest {
+  id: string
+  tool: string
+  title: string
+  summary: string
+  args: Record<string, unknown>
+  at: number
+}
+
 export const api = {
   info: () => call<{ version: string; dataDir: string; electron: string; node: string; platform: string }>('app:info'),
 
@@ -311,6 +332,12 @@ export const api = {
   searchAll: (query: string, instanceId?: string) => call<SearchHit[]>('search:all', query, instanceId),
   dataUsage: () => call<DiskUsage>('data:usage'),
   cleanUsage: (key: 'downloads' | 'cache' | 'logs') => call<CleanResult>('data:clean-usage', key),
+  /** 内容仓库（硬链接去重）现状 */
+  blobStats: () => call<BlobStats>('blobs:stats'),
+  /** 全库去重（把重复的 jar 收成硬链接） */
+  dedupeBlobs: () => call<DedupeResult>('blobs:dedupe'),
+  /** 清掉没人引用的孤儿 blob */
+  gcBlobs: () => call<{ files: number; bytes: number }>('blobs:gc'),
   dataSize: () =>
     call<{ dir: string; bytes: number; files: number; partial: boolean }>('data:size'),
   /** 数据目录体检：是否落在安装目录里（更新会清空安装目录 → 要红字提示） */
@@ -343,6 +370,15 @@ export const api = {
   createInstance: (input: { name: string; mcVersion: string; loader?: string; loaderVersion?: string }) =>
     call<Instance>('instance:create', input),
   updateInstance: (id: string, patch: Partial<Instance>) => call<Instance>('instance:update', id, patch),
+  /** 改名：只改显示名，id / 目录 / 云备份的键都不动；改完云端配置包会自动同步一次 */
+  renameInstance: (id: string, name: string) =>
+    call<{ instance: Instance; cloudSync: 'queued' | 'off' | 'not-logged-in' }>('instance:rename', id, name),
+  /** 换封面：弹系统选图框，选完主进程拷进实例目录；取消返回 undefined */
+  pickInstanceIcon: (id: string) => call<Instance | undefined>('instance:pick-icon', id),
+  clearInstanceIcon: (id: string) => call<Instance>('instance:clear-icon', id),
+  /** 置顶 / 分组（纯元数据，改完云端配置包自动同步一次） */
+  setInstanceMeta: (id: string, patch: { pinned?: boolean; group?: string }) =>
+    call<{ instance: Instance; cloudSync: 'queued' | 'off' | 'not-logged-in' }>('instance:meta', id, patch),
   installLoader: (id: string, loader: string, loaderVersion: string) =>
     call<Instance>('instance:install-loader', id, loader, loaderVersion),
   installLangPack: (id: string) =>
@@ -500,6 +536,9 @@ export const api = {
   shareReadImage: (file: string) => call<string>('share:read-image', file),
   /** 分享卡：PNG 落盘到该实例的截图目录，返回路径 */
   shareSavePng: (instanceId: string, base64: string) => call<string>('share:save-png', instanceId, base64),
+  /** 分享卡：「另存为…」自己挑位置；用户取消返回 undefined */
+  shareSavePngAs: (instanceId: string, base64: string) =>
+    call<string | undefined>('share:save-png-as', instanceId, base64),
   /** 分享卡：直接进剪贴板，方便粘到聊天窗 */
   shareCopyImage: (base64: string) => call<void>('share:copy-image', base64),
 
@@ -676,6 +715,16 @@ export const api = {
     call<boolean>('app:report-error', scope, message, detail),
   readErrors: () => call<string[]>('app:read-errors'),
 
+  // ---- AI 助手（MCP）----
+  // 桥开在主进程里，这里只是读状态 / 改设置 / 回确认
+  mcpStatus: () => call<McpStatusInfo>('mcp:status'),
+  mcpConfig: () =>
+    call<{ command: string; args: string[]; env: Record<string, string>; json: string }>('mcp:config'),
+  mcpRestart: () => call<McpStatusInfo>('mcp:restart'),
+  mcpConsentReply: (id: string, allow: boolean, remember: boolean) =>
+    call<boolean>('mcp:consent-reply', id, allow, remember),
+  onMcpConsent: (cb: (req: McpConsentRequest) => void) => bridge.on('event:mcp-consent', cb),
+
   // ---- CurseForge（要 API Key）----
   cfSearch: (input: { query: string; mcVersion?: string; loader?: string; type?: CfContentType }) =>
     call<{
@@ -792,7 +841,31 @@ export const api = {
   /** 手动体检的进度（拆包时每 8 个报一次），用来画进度条 */
   onModsDiagnoseProgress: (cb: (p: { instanceId: string; done: number; total: number }) => void) =>
     bridge.on('event:mods-diagnose-progress', cb),
-  exportMrpack: (instanceId: string) => call<string>('modpack:export-mrpack', instanceId),  inspectMrpack: (file: string) =>
+  exportMrpack: (instanceId: string) => call<string>('modpack:export-mrpack', instanceId),
+  /** 导出成 CurseForge 整合包（manifest.json + overrides） */
+  exportCfZip: (instanceId: string) =>
+    call<{ path: string; matched: number; unmatched: number; usedKey: boolean }>('modpack:export-cfzip', instanceId),
+  /** 导出前的预检：有没有配 CF key、这个实例有多少 mod */
+  cfExportReady: (instanceId: string) => call<{ hasKey: boolean; mods: number }>('modpack:cf-ready', instanceId),
+  /** 导出服务端整合包前预检：哪些 mod 是纯客户端、会被剔除 */
+  serverPackPreview: (instanceId: string) =>
+    call<{
+      mcVersion: string
+      loader: string
+      loaderVersion?: string
+      totalMods: number
+      keep: number
+      clientOnly: { file: string; id?: string; name?: string; why: string }[]
+    }>('modpack:serverpack-preview', instanceId),
+  /** 导出成服务端整合包（mods + 配置 + 加载器服务端 + 启动脚本） */
+  exportServerPack: (instanceId: string) =>
+    call<{
+      path: string
+      keep: number
+      removed: { file: string; id?: string; why: string }[]
+      loaderFiles: string[]
+    }>('modpack:export-serverpack', instanceId),
+  inspectMrpack: (file: string) =>
     call<{ name?: string; versionId?: string; files: number; deps?: Record<string, string> }>('modpack:inspect', file),
 
   // ---------------- 云同步（自建服务端，契约见 docs/SERVER-API.md） ----------------
