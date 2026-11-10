@@ -137,8 +137,26 @@ const main = async () => {
   await Promise.all(workers)
   console.log(`[open] blob 全部就绪：${blobs.length} 个`)
 
-  const tree = await call('POST', `/repos/${owner}/${repo}/git/trees`, { tree: blobs })
-  console.log(`[open] tree 已建：${tree.sha.slice(0, 10)}`)
+  let treeSha = null
+  const CHUNK = 60
+  for (let i = 0; i < blobs.length; i += CHUNK) {
+    const part = blobs.slice(i, i + CHUNK)
+    const body = treeSha ? { base_tree: treeSha, tree: part } : { tree: part }
+    let r
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      try {
+        r = await call("POST", `/repos/${owner}/${repo}/git/trees`, body)
+        break
+      } catch (e) {
+        console.log(`[open] tree 块 ${i / CHUNK + 1} 第 ${attempt} 次失败：${e.message.slice(0, 200)}`)
+        if (attempt === 4) throw e
+        await new Promise((res) => setTimeout(res, 2000 * attempt))
+      }
+    }
+    treeSha = r.sha
+    console.log(`[open] tree 块 ${i / CHUNK + 1} → ${treeSha.slice(0, 10)}`)
+  }
+  const tree = { sha: treeSha }
 
   // 接着现有历史走（有 main 就用它当父提交，没有就是首个提交）
   let parents = []
