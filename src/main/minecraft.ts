@@ -442,6 +442,30 @@ async function installByInstallerJar(
   onProgress?: ProgressFn
 ): Promise<string> {
   const key = `install-${instanceKey(gameDir)}`
+  const name = loader === 'forge' ? 'Forge' : 'NeoForge'
+  try {
+    return await runInstallerJar(loader, mcVersion, loaderVersion, gameDir, java, onProgress)
+  } catch (e) {
+    // 失败必须给进度条一个**终态**。
+    // 以前这里直接往外抛：进度条最后一条还停在安装器的 stdout 上（比如
+    // 「Host: authserver.mojang.com [Unknown]」），渲染层的 live 判断认为它还活着，
+    // 于是界面显示「2/3 67%」一动不动，用户以为卡了一晚上（1.3.2 修的就是这个）。
+    const msg = ((e as Error)?.message ?? String(e)).replace(/\s+/g, ' ').trim().slice(0, 200)
+    onProgress?.({ key, phase: `${name} 安装失败：${msg}`, current: 3, total: 3, done: true })
+    throw e
+  }
+}
+
+/** 真正干活的那半边；失败由上面的 installByInstallerJar 兜成终态进度 */
+async function runInstallerJar(
+  loader: 'forge' | 'neoforge',
+  mcVersion: string,
+  loaderVersion: string,
+  gameDir: string,
+  java: string,
+  onProgress?: ProgressFn
+): Promise<string> {
+  const key = `install-${instanceKey(gameDir)}`
   const mirror = store.settings.downloadSource !== 'official'
   const full = loader === 'forge' ? `${mcVersion}-${loaderVersion}` : loaderVersion
 
@@ -503,6 +527,9 @@ async function installByInstallerJar(
     {
       cwd: gameDir,
       timeoutMs: 20 * 60 * 1000,
+      // 安装器卡在一条不返回的连接上时会彻底静音：3 分钟没一行输出就判死，
+      // 别让用户对着 20 分钟的保底超时干等（2026-11-10 那次卡了整晚的教训）
+      idleTimeoutMs: 3 * 60 * 1000,
       onLine: (line) => onProgress?.({ key, phase: line.slice(0, 120), current: 2, total: 3 })
     }
   )

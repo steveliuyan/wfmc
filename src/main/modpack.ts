@@ -210,6 +210,35 @@ export async function installCurseforgeZip(
   signal?: AbortSignal,
   spawn?: SpawnFn
 ): Promise<string> {
+  // 失败必须给进度条一个终态：拖拽安装这条路（ipc.ts 的 drop:handle）没有包 runTask，
+  // 没有任务面板替它收尾，而渲染层 currentProgress 只看 payload.done。
+  // 以前失败时进度条会永远停在安装器最后一行输出上（2026-11-10 那个「卡了一晚上 2/3」）。
+  const seen = new Set<string>()
+  const track: ProgressFn | undefined = onProgress
+    ? (p) => {
+        if (p?.key) seen.add(p.key)
+        onProgress(p)
+      }
+    : undefined
+  try {
+    return await installCurseforgeZipInner(zipPath, displayName, track, signal, spawn)
+  } catch (e) {
+    const msg = ((e as Error)?.message ?? String(e)).replace(/\s+/g, ' ').trim().slice(0, 200)
+    for (const key of seen) {
+      onProgress?.({ key, phase: `整合包安装失败：${msg}`, current: 1, total: 1, done: true })
+    }
+    throw e
+  }
+}
+
+/** 真正干活的半边；失败由上面的 installCurseforgeZip 兜成终态进度 */
+async function installCurseforgeZipInner(
+  zipPath: string,
+  displayName?: string,
+  onProgress?: ProgressFn,
+  signal?: AbortSignal,
+  spawn?: SpawnFn
+): Promise<string> {
   const manifestBuf = readFileInsideZip(zipPath, 'manifest.json')
   if (!manifestBuf) throw new Error('不是有效的 CurseForge 整合包（缺少 manifest.json）')
 
